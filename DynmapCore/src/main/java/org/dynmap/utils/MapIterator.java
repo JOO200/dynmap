@@ -27,6 +27,19 @@ public interface MapIterator extends MapDataContext {
      */
     int getBlockEmittedLight();
     /**
+     * Get block sky and emitted light, relative to current coordinate
+     * @return (emitted light * 256) + sky light
+     */
+    int getBlockLight(BlockStep step);
+    /**
+     * Get block sky and emitted light, relative to current coordinate
+     * @param xoff - x offset from current position
+     * @param yoff - y offset from current position
+     * @param zoff - z offset from current position
+     * @return (emitted light * 256) + sky light
+     */
+    int getBlockLight(int xoff, int yoff, int zoff);
+    /**
      * Get biome at coordinates
      * @return biome
      */
@@ -103,13 +116,16 @@ public interface MapIterator extends MapDataContext {
      */
     long getBlockKey();
     /**
-     * Test if current section (16 x 16 x 16) is empty (all air)
-     * @return true if empty
-     */
-    boolean isEmptySection();
-    /**
      * Get inhabited ticks for current position
      * @return ticks inhabited
      */
     long getInhabitedTicks();
+    /**
+     * Get chunk dataVersion 
+     */
+    default int getDataVersion() { return 0; }
+    /**
+     * Get chunk status
+     */
+    default String getChunkStatus() { return null; }
 }

@@ -5,7 +5,6 @@ import java.util.BitSet;
 import java.util.List;
 import java.util.Map;
 
-import org.dynmap.Log;
 import org.dynmap.renderer.CustomRenderer;
 import org.dynmap.renderer.MapDataContext;
 import org.dynmap.renderer.RenderPatch;
@@ -216,4 +215,8 @@ public class FenceWallBlockStateRenderer extends CustomRenderer {
         }
         return meshes[off];
     }    
+    @Override
+    public boolean isOnlyBlockStateSensitive() {
+    	return true;
+    }
 }

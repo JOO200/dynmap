@@ -1,4 +1,4 @@
-# Dynmap™ - dynamic web maps for Minecraft servers
+# Dynmap®  - dynamic web maps for Minecraft servers
 
 # Jump around the README
 * [How to build](#how-to-build)
@@ -9,45 +9,58 @@
 * [Where to go for questions and discussions](#where-to-go-for-questions-and-discussions)
 * [Where to go to make donations](#where-to-go-to-make-donations)
 # How to build
-Dynmap 3.x+ uses Gradle for building support for all platforms, with all resulting artifacts produced in the /targets directory
+Dynmap 3.x+ uses Gradle for building support for all platforms, with all resulting artifacts produced in the /targets directory.  Due to Minecraft 1.18.x+ requirements, the developer's
+default JDK must be a JDK 17 (or later) versions - older versions will still be compiled
+to run on the default JDK for those platforms (JDK 8, or JDK 16 for 1.17.x), and common libraries are built JDK 8.
 
 To build, run:
 
-    ./gradlew clean build install
+    ./gradlew setup build
     
 Or (on Windows):
 
-    gradlew.bat clean build install
+    gradlew.bat setup build
+    
+The Forge 1.11.2 and 1.12.2 versions (specifically ForgeGradle for these) are very sensitive to being built by JDK 8, so to build them, 
+set JAVA_HOME to correspond to a JDK 8 installation, then build using the following;
+
+    cd oldgradle
+    ./gradlew setup build
+    
+Or (on Windows):
+
+    cd oldgradle
+    gradlew.bat setup build
+
     
 # What platforms are supported?
 The following target platforms are supported, and you can find them at the links supplied:
 
 | Server type  | Version | Dynmap JAR | Where? |
 | ------------ | ------- | ---------- | ------ |
-| Spigot/PaperMC | ≤1.16.5  | `Dynmap-<version>-spigot.jar` | [SpigotMC](https://www.spigotmc.org/resources/dynmap.274/) |
-| Spigot/PaperMC | ≤1.16.5 | `Dynmap-<version>-spigot.jar` | [GitHub Releases](https://github.com/webbukkit/dynmap/releases) |
+| Spigot/PaperMC | ≤1.18.1  | `Dynmap-<version>-spigot.jar` | [SpigotMC](https://www.spigotmc.org/resources/dynmap.274/) |
+| Spigot/PaperMC | ≤1.18.1 | `Dynmap-<version>-spigot.jar` | [GitHub Releases](https://github.com/webbukkit/dynmap/releases) |
 | Forge | 1.11.2 | `Dynmap-<version>-forge-1.11.2.jar` | [GitHub Releases](https://github.com/webbukkit/dynmap/releases) |
 | Forge | 1.12.2 | `Dynmap-<version>-forge-1.12.2.jar` | [GitHub Releases](https://github.com/webbukkit/dynmap/releases) |
 | Forge | 1.13.2 | `Dynmap-<version>-forge-1.13.2.jar` | [GitHub Releases](https://github.com/webbukkit/dynmap/releases) |
 | Forge | 1.14.4 | `Dynmap-<version>-forge-1.14.4.jar` | [GitHub Releases](https://github.com/webbukkit/dynmap/releases) |
 | Forge | 1.15.2 | `Dynmap-<version>-forge-1.15.2.jar` | [GitHub Releases](https://github.com/webbukkit/dynmap/releases) |
-| Forge | 1.16.1 | `Dynmap-<version>-forge-1.16.1.jar` | [GitHub Releases](https://github.com/webbukkit/dynmap/releases) |
-| Forge | 1.16.2 | `Dynmap-<version>-forge-1.16.2.jar` | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
-| Forge | 1.16.3 | `Dynmap-<version>-forge-1.16.3.jar` | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
-| Forge | 1.16.4 | `Dynmap-<version>-forge-1.16.4.jar` | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
 | Forge | 1.16.5 | `Dynmap-<version>-forge-1.16.5.jar` | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
+| Forge | 1.17.1 | `Dynmap-<version>-forge-1.17.1.jar` | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
+| Forge | 1.18, 1.18.1 | `Dynmap-<version>-forge-1.18.jar`   | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
 | Fabric | 1.15.2 | `Dynmap-<version>-fabric-1.15.2.jar` | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
-| Fabric | 1.16.1 | `Dynmap-<version>-fabric-1.16.1.jar` | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
-| Fabric | 1.16.2 | `Dynmap-<version>-fabric-1.16.2.jar` | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
-| Fabric | 1.16.4 | `Dynmap-<version>-fabric-1.16.4.jar` | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
+| Fabric | 1.16.4, 1.16.5 | `Dynmap-<version>-fabric-1.16.4.jar` | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
+| Fabric | 1.17.1 | `Dynmap-<version>-fabric-1.17.1.jar` | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
+| Fabric | 1.18, 1.18.1 | `Dynmap-<version>-fabric-1.18.jar`   | [Curseforge](https://www.curseforge.com/minecraft/mc-mods/dynmapforge) |
     
 # Data Storage
 Dynmap supports the following storage backends:
 - Flat files: The default for a new installation
-- SQLite
-- MySQL
+- MySQL†
+- SQLite†
 - PostgreSQL (JDBC driver for this is now bundled with the Dynmap JAR)
-- MariaDB
+- MariaDB - is compatible with MySQL
+- †Note: drivers for SQL are usually included for Spigot and its derivatives but not included with other platforms or Dynmap. For Forge and Fabric servers we recommend Kosma's [SQLite mod](https://www.curseforge.com/minecraft/mc-mods/sqlite-jdbc) or [MySQL mod](https://www.curseforge.com/minecraft/mc-mods/mysql-jdbc) to add the needed drivers. Additionally, injecting driver classes into jar file will be recognized and supported.
 
 # Contributing to Dynmap's Code
 The Dynmap team welcomes Pull Requests with fixes, new features, and new platform support.  That said, the following rules apply:
@@ -62,7 +75,7 @@ explaining it to users, and fixing current and future problems - if we don't thi
    the code needs to be 'prettied up', it'll be done by the Dynmap team.
 - Do not make changes to core code (anything in DynmapCore or DynmapCoreAPI) unless you're ready to build and test it on all supported platforms.  Code that
 breaks building of ANY supported platform will be rejected.
-- Likewise, any Spigot related changes are expected to function correctly on all supported Spigot and PaperMC versions (currently 1.10.2 through 1.16.1).  
+- Likewise, any Spigot related changes are expected to function correctly on all supported Spigot and PaperMC versions (currently 1.10.2 through 1.18.1).  
 - Do not include any code that involves platform specific native libraries or command line behaviors.  Dynmap supports 32-bit and 64-bit, Windows, lots of
 Linux versions (both x86 and ARM), MacOS, being used in Docker environments, and more - this is all about staying as 'pure Java' as the Minecraft server itself
 is.  If your PR includes platform specific dependencies that are not coded to handle working on all the above platforms properly, the PR will be rejected.
@@ -125,4 +138,4 @@ We also have a subreddit located at https://www.reddit.com/r/Dynmap/
 I've set up a coffee-fund jar (I believe in the theory that software developers are machines that turn caffeine into code), for anyone who wants to throw in some tips!  I've got a Patreon here - https://www.patreon.com/dynmap, and for folks just looking to for a one-time coffee buy, hit my Ko-Fi at https://ko-fi.com/michaelprimm !
 
 
-Dynmap is a trademark of  Michael Primm, TX USA.  All Rights Reserved.
+Dynmap is a registered trademark of  Michael Primm, TX USA.  All Rights Reserved.

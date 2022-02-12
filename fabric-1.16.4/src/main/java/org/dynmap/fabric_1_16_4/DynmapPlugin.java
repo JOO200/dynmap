@@ -27,6 +27,7 @@ import net.minecraft.util.collection.IdList;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.registry.Registry;
+import net.minecraft.world.EmptyBlockView;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldAccess;
 import net.minecraft.world.biome.Biome;
@@ -39,6 +40,7 @@ import org.dynmap.common.BiomeMap;
 import org.dynmap.common.DynmapCommandSender;
 import org.dynmap.common.DynmapListenerManager;
 import org.dynmap.common.DynmapPlayer;
+import org.dynmap.common.chunk.GenericChunkCache;
 import org.dynmap.fabric_1_16_4.command.DmapCommand;
 import org.dynmap.fabric_1_16_4.command.DmarkerCommand;
 import org.dynmap.fabric_1_16_4.command.DynmapCommand;
@@ -65,7 +67,7 @@ public class DynmapPlugin {
     DynmapCore core;
     private PermissionProvider permissions;
     private boolean core_enabled;
-    public SnapshotCache sscache;
+    public GenericChunkCache sscache;
     public PlayerList playerList;
     MapManager mapManager;
     /**
@@ -172,6 +174,7 @@ public class DynmapPlugin {
         int baseidx = 0;
 
         Iterator<BlockState> iter = bsids.iterator();
+    	DynmapBlockState.Builder bld = new DynmapBlockState.Builder();
         while (iter.hasNext()) {
             BlockState bs = iter.next();
             int idx = bsids.getRawId(bs);
@@ -203,27 +206,20 @@ public class DynmapPlugin {
                     }
                     statename += p.getName() + "=" + bs.get(p).toString();
                 }
-                //Log.info("bn=" + bn + ", statenme=" + statename + ",idx=" + idx + ",baseidx=" + baseidx);
-                DynmapBlockState dbs = new DynmapBlockState(basebs, idx - baseidx, bn, statename, mat.toString(), idx);
+                int lightAtten = bs.isOpaqueFullCube(EmptyBlockView.INSTANCE, BlockPos.ORIGIN) ? 15 : (bs.isTranslucent(EmptyBlockView.INSTANCE, BlockPos.ORIGIN) ? 0 : 1);
+                //Log.info("statename=" + bn + "[" + statename + "], lightAtten=" + lightAtten);
+                // Fill in base attributes
+                bld.setBaseState(basebs).setStateIndex(idx - baseidx).setBlockName(bn).setStateName(statename).setMaterial(mat.toString()).setLegacyBlockID(idx).setAttenuatesLight(lightAtten);
+				if (mat.isSolid()) { bld.setSolid(); }
+				if (mat == Material.AIR) { bld.setAir(); }
+				if (mat == Material.WOOD) { bld.setLog(); }
+				if (mat == Material.LEAVES) { bld.setLeaves(); }
+				if ((!bs.getFluidState().isEmpty()) && !(bs.getBlock() instanceof FluidBlock)) {
+					bld.setWaterlogged();
+				}
+                DynmapBlockState dbs = bld.build(); // Build state
                 stateByID[idx] = dbs;
-                if (basebs == null) {
-                    basebs = dbs;
-                }
-                if (mat.isSolid()) {
-                    dbs.setSolid();
-                }
-                if (mat == Material.AIR) {
-                    dbs.setAir();
-                }
-                if (mat == Material.WOOD) {
-                    dbs.setLog();
-                }
-                if (mat == Material.LEAVES) {
-                    dbs.setLeaves();
-                }
-                if ((!bs.getFluidState().isEmpty()) && !(bs.getBlock() instanceof FluidBlock)) {
-                    dbs.setWaterlogged();
-                }
+                if (basebs == null) { basebs = dbs; }
             }
         }
         for (int gidx = 0; gidx < DynmapBlockState.getGlobalIndexMax(); gidx++) {
@@ -314,7 +310,7 @@ public class DynmapPlugin {
 
     boolean hasPerm(PlayerEntity psender, String permission) {
         PermissionsHandler ph = PermissionsHandler.getHandler();
-        if ((psender != null) && ph.hasPermission(psender.getName().getString(), permission)) {
+        if ((ph != null) && (psender != null) && ph.hasPermission(psender.getName().getString(), permission)) {
             return true;
         }
         return permissions.has(psender, permission);
@@ -322,7 +318,7 @@ public class DynmapPlugin {
 
     boolean hasPermNode(PlayerEntity psender, String permission) {
         PermissionsHandler ph = PermissionsHandler.getHandler();
-        if ((psender != null) && ph.hasPermissionNode(psender.getName().getString(), permission)) {
+        if ((ph != null) && (psender != null) && ph.hasPermissionNode(psender.getName().getString(), permission)) {
             return true;
         }
         return permissions.hasPermissionNode(psender, permission);
@@ -451,7 +447,6 @@ public class DynmapPlugin {
         core.setMinecraftVersion(mcver);
         core.setDataFolder(dataDirectory);
         core.setServer(fserver);
-        FabricMapChunkCache.init();
         core.setTriggerDefault(TRIGGER_DEFAULTS);
         core.setBiomeNames(getBiomeNames());
 
@@ -504,7 +499,7 @@ public class DynmapPlugin {
         }
 
         playerList = core.playerList;
-        sscache = new SnapshotCache(core.getSnapShotCacheSize(), core.useSoftRefInSnapShotCache());
+        sscache = new GenericChunkCache(core.getSnapShotCacheSize(), core.useSoftRefInSnapShotCache());
         /* Get map manager from core */
         mapManager = core.getMapManager();
 
@@ -686,19 +681,22 @@ public class DynmapPlugin {
                 ChunkPos cp = chunk.getPos();
                 if (fw != null) {
                     if (!checkIfKnownChunk(fw, cp)) {
-                        int ymax = 0;
+        				int ymax = Integer.MIN_VALUE;
+        				int ymin = Integer.MAX_VALUE;
                         ChunkSection[] sections = chunk.getSectionArray();
                         for (int i = 0; i < sections.length; i++) {
                             if ((sections[i] != null) && (!sections[i].isEmpty())) {
-                                ymax = 16 * (i + 1);
+        						int sy = sections[i].getYOffset();
+        						if (sy < ymin) ymin = sy;
+        						if ((sy+16) > ymax) ymax = sy + 16;
                             }
                         }
                         int x = cp.x << 4;
                         int z = cp.z << 4;
                         // If not empty AND not initial scan
-                        if (ymax > 0) {
+                        if (ymax != Integer.MIN_VALUE) {
                             Log.info("New generated chunk detected at " + cp + " for " + fw.getName());
-                            mapManager.touchVolume(fw.getName(), x, 0, z, x + 15, ymax, z + 16, "chunkgenerate");
+                            mapManager.touchVolume(fw.getName(), x, ymin, z, x + 15, ymax, z + 15, "chunkgenerate");
                         }
                     }
                     removeKnownChunk(fw, cp);
@@ -714,18 +712,21 @@ public class DynmapPlugin {
                 ChunkPos cp = chunk.getPos();
                 if (fw != null) {
                     if (!checkIfKnownChunk(fw, cp)) {
-                        int ymax = 0;
+        				int ymax = Integer.MIN_VALUE;
+        				int ymin = Integer.MAX_VALUE;
                         ChunkSection[] sections = chunk.getSectionArray();
                         for (int i = 0; i < sections.length; i++) {
                             if ((sections[i] != null) && (!sections[i].isEmpty())) {
-                                ymax = 16 * (i + 1);
+        						int sy = sections[i].getYOffset();
+        						if (sy < ymin) ymin = sy;
+        						if ((sy+16) > ymax) ymax = sy + 16;
                             }
                         }
                         int x = cp.x << 4;
                         int z = cp.z << 4;
                         // If not empty AND not initial scan
-                        if (ymax > 0) {
-                            mapManager.touchVolume(fw.getName(), x, 0, z, x + 15, ymax, z + 16, "chunkgenerate");
+                        if (ymax != Integer.MIN_VALUE) {
+                            mapManager.touchVolume(fw.getName(), x, ymin, z, x + 15, ymax, z + 15, "chunkgenerate");
                         }
                         addKnownChunk(fw, cp);
                     }

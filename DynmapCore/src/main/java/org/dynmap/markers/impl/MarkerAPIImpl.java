@@ -10,8 +10,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -49,6 +51,7 @@ import org.dynmap.markers.PolyLineMarker;
 import org.dynmap.utils.BufferOutputStream;
 import org.dynmap.web.Json;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Supplier;
 
 /**
  * Implementation class for MarkerAPI - should not be called directly
@@ -64,6 +67,8 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
     private HashMap<String, PlayerSetImpl> playersets = new HashMap<String, PlayerSetImpl>();
     private DynmapCore core;
     static MarkerAPIImpl api;
+
+    private Map<String, Map<String, Supplier<String[]>>> tabCompletions = null;
 
     /* Built-in icons */
     private static final String[] builtin_icons = {
@@ -97,14 +102,14 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
         
         public MarkerUpdated(Marker m, boolean deleted) {
             this.id = m.getMarkerID();
-            this.label = m.getLabel();
+            this.label = Client.sanitizeHTML(m.getLabel());
             this.x = m.getX();
             this.y = m.getY();
             this.z = m.getZ();
             this.set = m.getMarkerSet().getMarkerSetID();
             this.icon = m.getMarkerIcon().getMarkerIconID();
-            this.markup = m.isLabelMarkup();
-            this.desc = m.getDescription();
+            this.markup = true;	// We are markup format all the time now
+            this.desc = Client.sanitizeHTML(m.getDescription());
             this.dim = m.getMarkerIcon().getMarkerIconSize().getSize();
             this.minzoom = m.getMinZoom();
             this.maxzoom = m.getMaxZoom();
@@ -148,7 +153,7 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
         
         public AreaMarkerUpdated(AreaMarker m, boolean deleted) {
             this.id = m.getMarkerID();
-            this.label = m.getLabel();
+            this.label = Client.sanitizeHTML(m.getLabel());
             this.ytop = m.getTopY();
             this.ybottom = m.getBottomY();
             int cnt = m.getCornerCount();
@@ -163,10 +168,10 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
             opacity = m.getLineOpacity();
             fillcolor = String.format("#%06X", m.getFillColor());
             fillopacity = m.getFillOpacity();
-            desc = m.getDescription();
+            desc = Client.sanitizeHTML(m.getDescription());
             this.minzoom = m.getMinZoom();
             this.maxzoom = m.getMaxZoom();
-            this.markup = m.isLabelMarkup();
+            this.markup = true;	// We are markup format all the time now
 
             this.set = m.getMarkerSet().getMarkerSetID();
             if(deleted) 
@@ -202,10 +207,12 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
         public String desc;
         public int minzoom;
         public int maxzoom;
+        public boolean markup;
         
         public PolyLineMarkerUpdated(PolyLineMarker m, boolean deleted) {
             this.id = m.getMarkerID();
-            this.label = m.getLabel();
+            this.label = Client.sanitizeHTML(m.getLabel());
+            this.markup = true;	// We are markup format all the time now
             int cnt = m.getCornerCount();
             x = new double[cnt];
             y = new double[cnt];
@@ -218,7 +225,7 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
             color = String.format("#%06X", m.getLineColor());
             weight = m.getLineWeight();
             opacity = m.getLineOpacity();
-            desc = m.getDescription();
+            desc = Client.sanitizeHTML(m.getDescription());
             this.minzoom = m.getMinZoom();
             this.maxzoom = m.getMaxZoom();
 
@@ -260,21 +267,23 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
         public String desc;
         public int minzoom;
         public int maxzoom;
+        public boolean markup;
         
         public CircleMarkerUpdated(CircleMarker m, boolean deleted) {
             this.id = m.getMarkerID();
-            this.label = m.getLabel();
+            this.label = Client.sanitizeHTML(m.getLabel());
             this.x = m.getCenterX();
             this.y = m.getCenterY();
             this.z = m.getCenterZ();
             this.xr = m.getRadiusX();
             this.zr = m.getRadiusZ();
+            this.markup = true;	// We are markup format all the time now
             color = String.format("#%06X", m.getLineColor());
             weight = m.getLineWeight();
             opacity = m.getLineOpacity();
             fillcolor = String.format("#%06X", m.getFillColor());
             fillopacity = m.getFillOpacity();
-            desc = m.getDescription();
+            desc = Client.sanitizeHTML(m.getDescription());
             this.minzoom = m.getMinZoom();
             this.maxzoom = m.getMaxZoom();
 
@@ -419,6 +428,182 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
         		Log.info("Finish marker initialization");
     		}
         }, 0);
+    }
+
+    /**
+	 * Generates a map of field:value argument tab completion suggestions for every /dmarker subcommand
+     * This is quite long as there are a lot of arguments to deal with, and don't have Java 9 map literals
+	 */
+    private void initTabCompletions() {
+        //Static values
+        String[] emptyValue = new String[]{};
+        String[] booleanValue = new String[]{"true", "false"};
+        String[] typeValue = new String[]{"icon", "area", "line", "circle"};
+
+        Supplier<String[]> emptySupplier = () -> emptyValue;
+        Supplier<String[]> booleanSupplier = () -> booleanValue;
+
+        //Dynamic values
+        Supplier<String[]> iconSupplier = () -> markericons.keySet().toArray(new String[0]);
+        Supplier<String[]> markerSetSupplier = () -> markersets.keySet().toArray(new String[0]);
+        Supplier<String[]> worldSupplier = () ->
+                core.mapManager.getWorlds().stream().map(DynmapWorld::getName).toArray(String[]::new);
+
+        //Arguments used in multiple commands
+        Map<String, Supplier<String[]>> labelArg = Collections.singletonMap("label", emptySupplier);
+        Map<String, Supplier<String[]>> idArg = Collections.singletonMap("id", emptySupplier);
+        Map<String, Supplier<String[]>> newLabelArg = Collections.singletonMap("newlabel", emptySupplier);
+        Map<String, Supplier<String[]>> markerSetArg = Collections.singletonMap("set", markerSetSupplier);
+        Map<String, Supplier<String[]>> newSetArg = Collections.singletonMap("newset", markerSetSupplier);
+        Map<String, Supplier<String[]>> fileArg = Collections.singletonMap("file", emptySupplier);
+
+        //Arguments used in commands taking a location
+        Map<String, Supplier<String[]>> locationArgs = new LinkedHashMap<>();
+        locationArgs.put("x", emptySupplier);
+        locationArgs.put("y", emptySupplier);
+        locationArgs.put("z", emptySupplier);
+        locationArgs.put("world", worldSupplier);
+
+        //Args shared with all add/update commands
+        Map<String, Supplier<String[]>> sharedArgs = new LinkedHashMap<>(labelArg);
+        sharedArgs.putAll(idArg);
+
+        //Args shared with all add/update commands affecting objects visible on the map
+        Map<String, Supplier<String[]>> mapObjectArgs = new LinkedHashMap<>(sharedArgs);
+        mapObjectArgs.put("minzoom", emptySupplier);
+        mapObjectArgs.put("maxzoom", emptySupplier);
+
+        //Args for marker set add/update commands
+        Map<String, Supplier<String[]>> setArgs = new LinkedHashMap<>(mapObjectArgs);
+        setArgs.put("prio", emptySupplier);
+        setArgs.put("hide", booleanSupplier);
+        setArgs.put("showlabel", booleanSupplier);
+        setArgs.put("deficon", iconSupplier);
+
+        //Args for marker add/update commands
+        Map<String, Supplier<String[]>> markerArgs = new LinkedHashMap<>(mapObjectArgs);
+        markerArgs.putAll(markerSetArg);
+        markerArgs.put("markup", booleanSupplier);
+        markerArgs.put("icon", iconSupplier);
+        markerArgs.putAll(locationArgs);
+
+        //Args for area/line/circle add/update commands
+        Map<String, Supplier<String[]>> shapeArgs = new LinkedHashMap<>(mapObjectArgs);
+        shapeArgs.putAll(markerSetArg);
+        shapeArgs.put("markup", booleanSupplier);
+        shapeArgs.put("weight", emptySupplier);
+        shapeArgs.put("color", emptySupplier);
+        shapeArgs.put("opacity", emptySupplier);
+
+        //Args for area/circle add/update commands
+        Map<String, Supplier<String[]>> filledShapeArgs = new LinkedHashMap<>(shapeArgs);
+        filledShapeArgs.put("fillcolor", emptySupplier);
+        filledShapeArgs.put("fillopacity", emptySupplier);
+        filledShapeArgs.put("greeting", emptySupplier);
+        filledShapeArgs.put("greetingsub", emptySupplier);
+        filledShapeArgs.put("farewell", emptySupplier);
+        filledShapeArgs.put("farewellsub", emptySupplier);
+        filledShapeArgs.put("boost", booleanSupplier);
+        filledShapeArgs.putAll(locationArgs);
+
+        //Args for area add/update commands
+        Map<String, Supplier<String[]>> areaArgs = new LinkedHashMap<>(filledShapeArgs);
+        areaArgs.put("ytop", emptySupplier);
+        areaArgs.put("ybottom", emptySupplier);
+
+        //Args for circle add/update commands
+        Map<String, Supplier<String[]>> circleArgs = new LinkedHashMap<>(filledShapeArgs);
+        circleArgs.put("radius", emptySupplier);
+        circleArgs.put("radiusx", emptySupplier);
+        circleArgs.put("radiusz", emptySupplier);
+
+        //Args for icon add/update commands
+        Map<String, Supplier<String[]>> iconArgs = new LinkedHashMap<>(sharedArgs);
+        iconArgs.putAll(fileArg);
+
+        //Args for updateset command
+        Map<String, Supplier<String[]>> updateSetArgs = new LinkedHashMap<>(setArgs);
+        updateSetArgs.putAll(newLabelArg);
+
+        //Args for update (marker) command
+        Map<String, Supplier<String[]>> updateMarkerArgs = new LinkedHashMap<>(markerArgs);
+        updateMarkerArgs.putAll(newLabelArg);
+        updateMarkerArgs.putAll(newSetArg);
+
+        //Args for updateline command
+        Map<String, Supplier<String[]>> updateLineArgs = new LinkedHashMap<>(shapeArgs);
+        updateLineArgs.putAll(newLabelArg);
+        updateLineArgs.putAll(newSetArg);
+
+        //Args for updatearea command
+        Map<String, Supplier<String[]>> updateAreaArgs = new LinkedHashMap<>(areaArgs);
+        updateAreaArgs.putAll(newLabelArg);
+        updateAreaArgs.putAll(newSetArg);
+
+        //Args for updatecircle command
+        Map<String, Supplier<String[]>> updateCircleArgs = new LinkedHashMap<>(circleArgs);
+        updateCircleArgs.putAll(newLabelArg);
+        updateCircleArgs.putAll(newSetArg);
+
+        //Args for updateicon command
+        Map<String, Supplier<String[]>> updateIconArgs = new LinkedHashMap<>(iconArgs);
+        updateIconArgs.putAll(newLabelArg);
+
+        //Args for movehere command
+        Map<String, Supplier<String[]>> moveHereArgs = new LinkedHashMap<>(sharedArgs);
+        moveHereArgs.putAll(markerSetArg);
+
+        //Args for marker/area/circle/line delete commands
+        Map<String, Supplier<String[]>> deleteArgs = new LinkedHashMap<>(sharedArgs);
+        deleteArgs.putAll(markerSetArg);
+
+        //Args for label/desc commands
+        Map<String, Supplier<String[]>> descArgs = new LinkedHashMap<>(sharedArgs);
+        descArgs.putAll(markerSetArg);
+        descArgs.put("type", () -> typeValue);
+
+        //Args for label/desc import commands
+        Map<String, Supplier<String[]>> importArgs = new LinkedHashMap<>(descArgs);
+        importArgs.putAll(fileArg);
+
+        //Args for appendesc command
+        Map<String, Supplier<String[]>> appendArgs = new LinkedHashMap<>(descArgs);
+        appendArgs.put("desc", emptySupplier);
+
+        tabCompletions = new HashMap<>();
+        tabCompletions.put("add", markerArgs);
+        tabCompletions.put("addicon", iconArgs);
+        tabCompletions.put("addarea", areaArgs);
+        tabCompletions.put("addline", shapeArgs); //No unique args
+        tabCompletions.put("addcircle", circleArgs);
+        tabCompletions.put("addset", setArgs);
+
+        tabCompletions.put("update", updateMarkerArgs);
+        tabCompletions.put("updateicon", updateIconArgs);
+        tabCompletions.put("updatearea", updateAreaArgs);
+        tabCompletions.put("updateline", updateLineArgs);
+        tabCompletions.put("updatecircle", updateCircleArgs);
+        tabCompletions.put("updateset", updateSetArgs);
+        tabCompletions.put("movehere", moveHereArgs);
+
+        tabCompletions.put("delete", deleteArgs);
+        tabCompletions.put("deleteicon", sharedArgs); //Doesn't have set: arg
+        tabCompletions.put("deletearea", deleteArgs);
+        tabCompletions.put("deleteline", deleteArgs);
+        tabCompletions.put("deletecircle", deleteArgs);
+        tabCompletions.put("deleteset", sharedArgs); //Doesn't have set: arg
+
+        tabCompletions.put("list", markerSetArg);
+        tabCompletions.put("listareas", markerSetArg);
+        tabCompletions.put("listlines", markerSetArg);
+        tabCompletions.put("listcircles", markerSetArg);
+
+        tabCompletions.put("getdesc", descArgs);
+        tabCompletions.put("importdesc", importArgs);
+        tabCompletions.put("resetdesc", descArgs);
+        tabCompletions.put("getlabel", descArgs);
+        tabCompletions.put("importlabel", importArgs);
+        tabCompletions.put("appenddesc", appendArgs);
     }
     
     public void scheduleWriteJob() {
@@ -1318,6 +1503,32 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
         } finally {
             api.lock.writeLock().unlock();
         }
+    }
+
+    public List<String> getTabCompletions(DynmapCommandSender sender, String[] args, DynmapCore core) {
+        /* Re-parse args - handle doublequotes */
+        args = DynmapCore.parseArgs(args, sender, true);
+
+        if (args == null || args.length <= 1) {
+            return Collections.emptyList();
+        }
+
+        if (tabCompletions == null) {
+            initTabCompletions();
+        }
+
+        String cmd = args[0];
+
+        if (cmd.equals("addcorner") && core.checkPlayerPermission(sender, "marker.addarea")) {
+            if (args.length == 5) {
+                return core.getWorldSuggestions(args[4]);
+            }
+        } else if (core.checkPlayerPermission(sender, "marker." + cmd)
+                && tabCompletions.containsKey(cmd)) {
+            return core.getFieldValueSuggestions(args, tabCompletions.get(cmd));
+        }
+
+        return Collections.emptyList();
     }
 
     private static boolean processAddMarker(DynmapCore plugin, DynmapCommandSender sender, String cmd, String commandLabel, String[] args, DynmapPlayer player) {
@@ -2323,7 +2534,7 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
     }
     
     private static boolean processUpdateArea(DynmapCore plugin, DynmapCommandSender sender, String cmd, String commandLabel, String[] args) {
-        String id, label, setid, newlabel, markup;
+        String id, label, setid, newlabel, markup, newset;
         if(args.length > 1) {
             /* Parse arguements */
             Map<String,String> parms = parseArgs(args, sender);
@@ -2365,6 +2576,15 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
             }
             else if(markup != null) {
                 marker.setLabel(marker.getLabel(), "true".equals(markup));
+            }
+    	    newset = parms.get(ARG_NEWSET);
+            if (newset != null) {
+                MarkerSet ms = api.getMarkerSet(newset);
+                if(ms == null) {
+                    sender.sendMessage("Error: invalid new marker set - " + newset);
+                    return true;
+                }
+                marker.setMarkerSet(ms);
             }
             if(!processAreaArgs(sender,marker, parms))
                 return true;
@@ -2524,7 +2744,7 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
         return true;
     }
     private static boolean processUpdateLine(DynmapCore plugin, DynmapCommandSender sender, String cmd, String commandLabel, String[] args) {
-        String id, setid, label, newlabel, markup;
+        String id, setid, label, newlabel, markup, newset;
         if(args.length > 1) {
             /* Parse arguements */
             Map<String,String> parms = parseArgs(args, sender);
@@ -2566,6 +2786,15 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
             }
             else if(markup != null) {
                 marker.setLabel(marker.getLabel(), "true".equals(markup));
+            }
+    	    newset = parms.get(ARG_NEWSET);
+            if (newset != null) {
+                MarkerSet ms = api.getMarkerSet(newset);
+                if(ms == null) {
+                    sender.sendMessage("Error: invalid new marker set - " + newset);
+                    return true;
+                }
+                marker.setMarkerSet(ms);
             }
             if(!processPolyArgs(sender,marker, parms))
                 return true;
@@ -2742,7 +2971,7 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
         return true;
     }
     private static boolean processUpdateCircle(DynmapCore plugin, DynmapCommandSender sender, String cmd, String commandLabel, String[] args) {
-        String id, setid, label, newlabel, markup;
+        String id, setid, label, newlabel, markup, newset;
         if(args.length > 1) {
             /* Parse arguements */
             Map<String,String> parms = parseArgs(args, sender);
@@ -2785,6 +3014,15 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
             else if(markup != null) {
                 marker.setLabel(marker.getLabel(), "true".equals(markup));
             }
+    	    newset = parms.get(ARG_NEWSET);
+            if (newset != null) {
+                MarkerSet ms = api.getMarkerSet(newset);
+                if(ms == null) {
+                    sender.sendMessage("Error: invalid new marker set - " + newset);
+                    return true;
+                }
+                marker.setMarkerSet(ms);
+            }            
             if(!processCircleArgs(sender,marker, parms))
                 return true;
             sender.sendMessage("Updated circle id:" + marker.getMarkerID() + " (" + marker.getLabel() + ")");
@@ -3323,5 +3561,23 @@ public class MarkerAPIImpl implements MarkerAPI, Event.Listener<DynmapWorld> {
         for(MarkerSetImpl ms : api.markersets.values()) {
         	ms.addEnteredMarkers(entered, worldid, x, y, z);
         }
+    }
+    /**
+     * Check if loaded string needs to be escaped (if non-markup)
+     */
+    public static String escapeForHTMLIfNeeded(String txt, boolean markup) {
+    	if (markup) return txt;	// Not needed for markup
+    	// If escaped properly, these characters aren't present (all but ampersand of HTML active characrers
+    	if (txt != null) {
+    		if ((txt.indexOf('<') >= 0) || (txt.indexOf('>') >= 0) || (txt.indexOf('\'') >= 0) || (txt.indexOf('"') >= 0)) {
+    			return Client.encodeForHTML(txt);
+    		}
+    		// If ampersand without semicolon after (simplistic check for ampersand without being escape sequence)
+    		int idx = txt.lastIndexOf('&');
+    		if ((idx >= 0) && (txt.indexOf(';', idx) < 0)) {
+    			return Client.encodeForHTML(txt);    			
+    		}
+    	}
+    	return txt;
     }
 }

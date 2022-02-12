@@ -1,14 +1,7 @@
 package org.dynmap.hdmap.renderer;
 
-import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.Map;
-
-import org.dynmap.renderer.CustomRenderer;
-import org.dynmap.renderer.DynmapBlockState;
 import org.dynmap.renderer.MapDataContext;
 import org.dynmap.renderer.RenderPatch;
-import org.dynmap.renderer.RenderPatchFactory;
 
 /**
  * Simple renderer for handling single and double chests (1.13+)
@@ -30,5 +23,9 @@ public class ChestStateRenderer extends ChestRenderer {
             idx = idx * 3;
         }
         return models[byIndex[idx].ordinal()];
+    }
+    @Override
+    public boolean isOnlyBlockStateSensitive() {
+    	return true;
     }
 }

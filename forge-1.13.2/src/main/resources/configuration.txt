@@ -151,10 +151,12 @@ components:
     type: playermarkers
     showplayerfaces: true
     showplayerhealth: true
-    # If true, show player body too (only valid if showplayerfaces=true
+    # If true, show player body too (only valid if showplayerfaces=true)
     showplayerbody: false
-    # Option to make player faces small - don't use with showplayerhealth
+    # Option to make player faces small - don't use with showplayerhealth or largeplayerfaces
     smallplayerfaces: false
+    # Option to make player faces larger - don't use with showplayerhealth or smallplayerfaces
+    largeplayerfaces: false
     # Optional - make player faces layer hidden by default
     hidebydefault: false
     # Optional - ordering priority in layer menu (low goes before high - default is 0)
@@ -256,7 +258,7 @@ block-alias:
 #    "minecraft:quartz_ore": "stone"
 #    "diamond_ore": "coal_ore"
 
-# Default image format for HDMaps (png, jpg, jpg-q75, jpg-q80, jpg-q85, jpg-q90, jpg-q95, jpg-q100, webp, webp-q75, webp-q80, webp-q85, webp-q90, webp-q95, webp-q100, wepb-l),
+# Default image format for HDMaps (png, jpg, jpg-q75, jpg-q80, jpg-q85, jpg-q90, jpg-q95, jpg-q100, webp, webp-q75, webp-q80, webp-q85, webp-q90, webp-q95, webp-q100, webp-l),
 # Note: any webp format requires the presence of the 'webp command line tools' (cwebp, dwebp) (https://developers.google.com/speed/webp/download)
 #
 # Has no effect on maps with explicit format settings
@@ -286,7 +288,7 @@ custom-colors-support: true
 # Control updating of player faces, once loaded (if faces are being managed by other apps or manually)
 #refreshskins: false
 
-# Customize URL used for fetching player skins (%player% is macro for name)
+# Customize URL used for fetching player skins (%player% is macro for name, %uuid% for UUID)
 skin-url: "http://skins.minecraft.net/MinecraftSkins/%player%.png"
 
 # Control behavior for new (1.0+) compass orientation (sunrise moved 90 degrees: east is now what used to be south)
@@ -312,6 +314,10 @@ tilespath: web/tiles
 
 # The path where the web-files are located.
 webpath: web
+
+# If set to false, disable extraction of webpath content (good if using custom web UI or 3rd party web UI)
+# Note: web interface is unsupported in this configuration - you're on your own
+update-webpath-files: true
 
 # The path were the /dynmapexp command exports OBJ ZIP files
 exportpath: export
@@ -455,6 +461,10 @@ soft-ref-cache: true
 #enterexitUseTitle: true
 # Set true if new enter messages should supercede pending exit messages (vs being queued in order), default false
 #enterReplacesExits: true
+
+# Published public URL for Dynmap server (allows users to use 'dynmap url' command to get public URL usable to access server
+# If not set, 'dynmap url' will not return anything.  URL should be fully qualified (e.g. https://mc.westeroscraft.com/)
+#publicURL: http://my.greatserver.com/dynmap
     
 # Set to true to enable verbose startup messages - can help with debugging map configuration problems
 # Set to false for a much quieter startup log
@@ -465,3 +475,6 @@ verbose: false
 #  - class: org.dynmap.debug.LogDebugger
 # Debug: dump blocks missing render data
 dump-missing-blocks: false
+
+# Log4J defense: string substituted for attempts to use macros in web chat
+hackAttemptBlurb: "(IaM5uchA1337Haxr-Ban Me!)"

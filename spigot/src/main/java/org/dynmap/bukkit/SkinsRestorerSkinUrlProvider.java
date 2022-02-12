@@ -5,8 +5,7 @@ import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
 import org.json.simple.JSONObject;
 import net.skinsrestorer.api.SkinsRestorerAPI;
-import net.skinsrestorer.bukkit.SkinsRestorer;
-import net.skinsrestorer.shared.utils.ReflectionUtil;
+import net.skinsrestorer.api.reflection.ReflectionUtil;
 
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -17,9 +16,9 @@ public class SkinsRestorerSkinUrlProvider implements SkinUrlProvider {
     private JSONParser mJsonParser;
     private SkinsRestorerAPI mSkinsRestorerApi;
 
-    SkinsRestorerSkinUrlProvider(SkinsRestorer skinsRestorer) {
+    SkinsRestorerSkinUrlProvider() {
         mJsonParser = new JSONParser();
-        mSkinsRestorerApi = skinsRestorer.getSkinsRestorerBukkitAPI();
+        mSkinsRestorerApi = SkinsRestorerAPI.getApi();
     }
 
     @Override

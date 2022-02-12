@@ -27,9 +27,12 @@ import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Scanner;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -72,7 +75,6 @@ import org.eclipse.jetty.server.handler.HandlerList;
 import org.eclipse.jetty.server.session.DefaultSessionIdManager;
 import org.eclipse.jetty.server.session.SessionHandler;
 import org.eclipse.jetty.servlet.ServletHolder;
-import org.eclipse.jetty.util.resource.FileResource;
 import org.eclipse.jetty.util.thread.ExecutorThreadPool;
 import org.yaml.snakeyaml.Yaml;
 
@@ -130,6 +132,7 @@ public class DynmapCore implements DynmapCommonAPI {
     private int     config_hashcode;    /* Used to signal need to reload web configuration (world changes, config update, etc) */
     private int fullrenderplayerlimit;  /* Number of online players that will cause fullrender processing to pause */
     private int updateplayerlimit;  /* Number of online players that will cause update processing to pause */
+    private String publicURL;	// If set, public HRL for accessing dynmap (declared by administrator)
     private boolean didfullpause;
     private boolean didupdatepause;
     private Map<String, LinkedList<String>> ids_by_ip = new HashMap<String, LinkedList<String>>();
@@ -142,6 +145,7 @@ public class DynmapCore implements DynmapCommonAPI {
     
     private boolean loginRequired;
     
+    private String hackAttemptSub = "(IaM5uchA1337Haxr-Ban Me!)";
     // WEBP support
     private String cwebpPath;
     private String dwebpPath;
@@ -160,6 +164,11 @@ public class DynmapCore implements DynmapCommonAPI {
     private String plugin_ver;
     private MapStorage defaultStorage;
     
+    // Read web path
+    private String webpath;
+    // And whether to disable web file update
+    private boolean updatewebpathfiles = true;
+
     private String[] deftriggers = { };
 
     private Boolean webserverCompConfigWarn = false;
@@ -396,6 +405,11 @@ public class DynmapCore implements DynmapCommonAPI {
         configuration = new ConfigurationNode(f);
         configuration.load();
 
+        // Read web path
+        webpath = configuration.getString("webpath", "web");
+        // And whether to disable web file update
+        updatewebpathfiles = configuration.getBoolean("update-webpath-files", true);
+        
         // Check if we are disabling the internal web server (implies external)
         isInternalWebServerDisabled = configuration.getBoolean("disable-webserver", false);
 
@@ -547,6 +561,8 @@ public class DynmapCore implements DynmapCommonAPI {
         if (migrate_chunks)
             Log.info("EXPERIMENTAL: chunk migration enabled");
         
+        publicURL = configuration.getString("publicURL", "");
+        
         /* Load preupdate/postupdate commands */
         ImageIOManager.preUpdateCommand = configuration.getString("custom-commands/image-updates/preupdatecommand", "");
         ImageIOManager.postUpdateCommand = configuration.getString("custom-commands/image-updates/postupdatecommand", "");
@@ -602,11 +618,13 @@ public class DynmapCore implements DynmapCommonAPI {
         updateConfigHashcode(); /* Initialize/update config hashcode */
         
         loginRequired = configuration.getBoolean("login-required", false);
+        hackAttemptSub = configuration.getString("hackAttemptBlurb", "(IaM5uchA1337Haxr-Ban Me!)");
             
         // If not disabled, load and initialize the internal web server
         if (!isInternalWebServerDisabled) {
         	loadWebserver();
         }
+        
 
         enabledTriggers.clear();
         List<String> triggers = configuration.getStrings("render-triggers", new ArrayList<String>());
@@ -669,26 +687,34 @@ public class DynmapCore implements DynmapCommonAPI {
         
         /* Print version info */
         Log.info("version " + plugin_ver + " is enabled - core version " + version );
-        Log.info("For support, visit https://reddit.com/r/Dynmap or our Discord at https://discord.gg/s3rd5qn");
+        Log.info("For support, visit our Discord at https://discord.gg/s3rd5qn");
+        Log.info("For news, visit https://reddit.com/r/Dynmap or follow https://twitter.com/Dynmap");
         Log.info("To report or track bugs, visit https://github.com/webbukkit/dynmap/issues");
         Log.info("If you'd like to donate, please visit https://www.patreon.com/dynmap or https://ko-fi.com/michaelprimm");
 
         events.<Object>trigger("initialized", null);
                 
-        //dumpColorMap("standard.txt", "standard");
-        //dumpColorMap("dokudark.txt", "dokudark.zip");
-        //dumpColorMap("dokulight.txt", "dokulight.zip");
-        //dumpColorMap("dokuhigh.txt", "dokuhigh.zip");
-        //dumpColorMap("misa.txt", "misa.zip");
-        //dumpColorMap("sphax.txt", "sphax.zip");
-
+        if (configuration.getBoolean("dumpColorMaps", false)) {
+        	dumpColorMap("standard.txt", "standard");
+        	dumpColorMap("default.txt", "standard");
+        	dumpColorMap("dokudark.txt", "dokudark.zip");
+        	dumpColorMap("dokulight.txt", "dokulight.zip");
+        	dumpColorMap("dokuhigh.txt", "dokuhigh.zip");
+        	dumpColorMap("misa.txt", "misa.zip");
+        	dumpColorMap("sphax.txt", "sphax.zip");
+        	dumpColorMap("ovocean.txt", "ovocean.zip");
+        	dumpColorMap("flames.txt", "standard");	// No TP around for this
+        	dumpColorMap("sk89q.txt", "standard");	// No TP around for this
+        	dumpColorMap("amidst.txt", "standard");	// No TP around for this
+        }
+        
         if (configuration.getBoolean("dumpBlockState", false)) {
         	Log.info("Block State Dump");
         	Log.info("----------------");
         	for (int i = 0; i < DynmapBlockState.getGlobalIndexMax(); i++) {
         		DynmapBlockState bs = DynmapBlockState.getStateByGlobalIndex(i);
         		if (bs != null) {
-        			Log.info(String.format("%d: %s", i, bs.toString()));
+        			Log.info(String.format("%d: %s (index %d)", i, bs.toString(), bs.stateIndex));
         		}
         	}
         	Log.info("----------------");
@@ -716,7 +742,7 @@ public class DynmapCore implements DynmapCommonAPI {
                 BlockStep.Y_PLUS.ordinal(), BlockStep.X_MINUS.ordinal(), BlockStep.Z_MINUS.ordinal() };
         FileWriter fw = null;
         try {
-            fw = new FileWriter(id);
+            fw = new FileWriter(new File(new File(getDataFolder(), "colorschemes"), id));
             TexturePack tp = TexturePack.getTexturePack(this, name);
             if (tp == null) return;
             tp = tp.resampleTexturePack(1);
@@ -739,13 +765,13 @@ public class DynmapCore implements DynmapCommonAPI {
                     switch(idx) {
                         case 1: // grass
                         case 18: // grass
-                            System.out.println("Used grass for " + blk);
+                        	Log.verboseinfo("Used grass for " + blk);
                             c.blendColor(tp.getTrivialGrassMultiplier() | 0xFF000000);
                             break;
                         case 2: // foliage
                         case 19: // foliage
                         case 22: // foliage
-                            System.out.println("Used foliage for " + blk);
+                        	Log.verboseinfo("Used foliage for " + blk);
                             c.blendColor(tp.getTrivialFoliageMultiplier() | 0xFF000000);
                             break;
                         case 13: // pine
@@ -759,19 +785,19 @@ public class DynmapCore implements DynmapCommonAPI {
                             break;
                         case 3: // water
                         case 20: // water
-                            System.out.println("Used water for " + blk);
+                        	Log.verboseinfo("Used water for " + blk);
                             c.blendColor(tp.getTrivialWaterMultiplier() | 0xFF000000);
                             break;
                         case 12: // clear inside
                             if (blk.isWater()) { // special case for water
-                                System.out.println("Used water for " + blk);
+                            	Log.verboseinfo("Used water for " + blk);
                                 c.blendColor(tp.getTrivialWaterMultiplier() | 0xFF000000);
                             }
                             break;
                     }
                     int custmult = tp.getCustomBlockMultiplier(blk);
                     if (custmult != 0xFFFFFF) {
-                        System.out.println(String.format("Custom color: %06x for %s", custmult, blk));
+                    	Log.info(String.format("Custom color: %06x for %s", custmult, blk));
                         if ((custmult & 0xFF000000) == 0) {
                             custmult |= 0xFF000000;
                         }
@@ -798,6 +824,7 @@ public class DynmapCore implements DynmapCommonAPI {
         } catch (IOException iox) {
         } finally {
             if (fw != null) { try { fw.close(); } catch (IOException x) {} }
+            Log.info("Dumped RP=" + name + " to " + id);
         }
     }
 
@@ -891,12 +918,13 @@ public class DynmapCore implements DynmapCommonAPI {
         return config_hashcode;
     }
 
-    private FileResource createFileResource(String path) {
+    @SuppressWarnings("deprecation")
+	private org.eclipse.jetty.util.resource.FileResource createFileResource(String path) {
         try {
         	File f = new File(path);
         	URI uri = f.toURI();
         	URL url = uri.toURL();
-            return new FileResource(url);
+            return new org.eclipse.jetty.util.resource.FileResource(url);
         } catch(Exception e) {
             Log.info("Could not create file resource");
             return null;
@@ -1117,6 +1145,11 @@ public class DynmapCore implements DynmapCommonAPI {
 
     /* Parse argument strings : handle quoted strings */
     public static String[] parseArgs(String[] args, DynmapCommandSender snd) {
+        return parseArgs(args, snd, false);
+    }
+
+    /* Parse argument strings : handle quoted strings */
+    public static String[] parseArgs(String[] args, DynmapCommandSender snd, boolean allowUnclosedQuotes) {
         ArrayList<String> rslt = new ArrayList<String>();
         /* Build command line, so we can parse our way - make sure there is trailing space */
         String cmdline = "";
@@ -1146,9 +1179,15 @@ public class DynmapCore implements DynmapCommonAPI {
                 sb.append(c);
             }
         }
-        if(inquote) {   /* If still in quote, syntax error */
-            snd.sendMessage("Error: unclosed doublequote");
-            return null;
+        if(inquote) {  // If still in quote
+            if(allowUnclosedQuotes) {
+                if(sb.length() > 1) { // Add remaining input without trailing space
+                    rslt.add(sb.substring(0, sb.length() - 1));
+                }
+            } else { // Syntax error
+                snd.sendMessage("Error: unclosed doublequote");
+                return null;
+            }
         }
         return rslt.toArray(new String[rslt.size()]);
     }
@@ -1162,7 +1201,6 @@ public class DynmapCore implements DynmapCommonAPI {
         "cancelrender",
         "radiusrender",
         "updaterender",
-        "reload",
         "stats",
         "triggerstats",
         "resetstats",
@@ -1177,6 +1215,8 @@ public class DynmapCore implements DynmapCommonAPI {
         "add-id-for-ip",
         "del-id-for-ip",
         "webregister",
+        "dumpmemory",
+        "url",
         "help"}));
 
     private static class CommandInfo {
@@ -1243,6 +1283,8 @@ public class DynmapCore implements DynmapCommonAPI {
         new CommandInfo("dynmap", "webregister", "Start registration process for creating web login account"),
         new CommandInfo("dynmap", "webregister", "<player>", "Start registration process for creating web login account for player <player>"),
         new CommandInfo("dynmap", "version", "Return version information"),
+        new CommandInfo("dynmap", "dumpmemory", "Return mempry use information"),
+        new CommandInfo("dynmap", "url", "Return confgured URL for Dynmap web"),
         new CommandInfo("dmarker", "", "Manipulate map markers."),
         new CommandInfo("dmarker", "add", "<label>", "Add new marker with label <label> at current location (use double-quotes if spaces needed)."),
         new CommandInfo("dmarker", "add", "id:<id> <label>", "Add new marker with ID <id> at current location (use double-quotes if spaces needed)."),
@@ -1250,7 +1292,7 @@ public class DynmapCore implements DynmapCommonAPI {
         new CommandInfo("dmarker", "movehere", "id:<id>", "Move marker with ID <id> to current location."),
         new CommandInfo("dmarker", "update", "<label> icon:<icon> newlabel:<newlabel>", "Update marker with ID <id> with new label <newlabel> and new icon <icon>."),
         new CommandInfo("dmarker", "delete", "<label>", "Delete marker with label of <label>."),
-        new CommandInfo("dmarker", "delete ", "id:<id>", "Delete marker with ID of <id>."),
+        new CommandInfo("dmarker", "delete", "id:<id>", "Delete marker with ID of <id>."),
         new CommandInfo("dmarker", "list", "List details of all markers."),
         new CommandInfo("dmarker", "icons", "List details of all icons."),
         new CommandInfo("dmarker", "addset", "<label>", "Add marker set with label <label>."),
@@ -1350,7 +1392,164 @@ public class DynmapCore implements DynmapCommonAPI {
         }
         sender.sendMessage(subcmdlist);
     }
-    
+
+    /**
+     * Returns tab completion suggestions for subcommands
+     *
+     * @param sender - The command sender requesting the tab completion suggestions
+     * @param cmd    - The top level command to suggest for
+     * @param arg    - Optional partial subcommand name to filter by
+     * @return List of tab completion suggestions
+     */
+    List<String> getSubcommandSuggestions(DynmapCommandSender sender, String cmd, String arg) {
+        List<String> suggestions = new ArrayList<>();
+
+        for (CommandInfo ci : commandinfo) {
+            //TODO: Permission checks
+            if (ci.matches(cmd) && ci.subcmd.startsWith(arg) && !suggestions.contains(ci.subcmd)) {
+                suggestions.add(ci.subcmd);
+            }
+        }
+
+        return suggestions;
+    }
+
+    /**
+     * Returns tab completion suggestions for world names
+     *
+     * @param arg - Partial world name to filter by
+     * @return List of tab completion suggestions
+     */
+    public List<String> getWorldSuggestions(String arg) {
+        return mapManager.getWorlds().stream()
+                .map(DynmapWorld::getName)
+                .filter(name -> name.startsWith(arg))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Returns tab completion suggestions for map names of a specific world
+     *
+     * @param worldName      - Name of the world
+     * @param mapArg         - Partial map name to filter by
+     * @param colonSeparated - Whether to return suggestions in world:map format
+     * @return List of tab completion suggestions
+     */
+    List<String> getMapSuggestions(String worldName, String mapArg, boolean colonSeparated) {
+        DynmapWorld world = mapManager.getWorld(worldName);
+
+        if (world != null) {
+            //Don't suggest anything if the argument contains a space as the client doesn't handle this well
+            if(mapArg.contains(" ")) {
+                return Collections.emptyList();
+            }
+
+            return world.maps.stream()
+                    .filter(map -> map.getName().startsWith(mapArg))
+                    .map(map -> {
+                        if (map.getName().contains(" ")) { //Quote if map name contains a space
+                            return "\"" + (colonSeparated ? worldName + ":" + map.getName() : map.getName()) + "\"";
+                        } else {
+                            return colonSeparated ? worldName + ":" + map.getName() : map.getName();
+                        }
+                    })
+                    .collect(Collectors.toList());
+        }
+
+        return Collections.emptyList();
+    }
+
+    /**
+     * Returns tab completion suggestions for map names without a world name, in world:map format
+     *
+     * @param arg - Partial world:map name to filter by
+     * @return List of tab completion suggestions
+     */
+    List<String> getMapSuggestions(String arg) {
+        int colon = arg.indexOf(":");
+        final String worldName = (colon >= 0) ? arg.substring(0, colon) : arg;
+        String mapArg = (colon >= 0) ? arg.substring(colon + 1) : null;
+
+        //Don't suggest anything if the argument contains a space as the client doesn't handle this well
+        if(arg.contains(" ")) {
+            return Collections.emptyList();
+        }
+
+        if (mapArg != null) {
+            return getMapSuggestions(worldName, mapArg, true);
+        }
+
+        List<String> suggestions = new ArrayList<>();
+
+        mapManager.getWorlds().stream()
+                .filter(world -> world.getName().startsWith(worldName))
+                .forEach(world -> {
+                    List<String> maps = world.maps.stream()
+                            .map(map -> {
+                                if (map.getName().contains(" ")) { //Quote if map name contains a space
+                                    return "\"" + world.getName() + ":" + map.getName() + "\"";
+                                } else {
+                                    return world.getName() + ":" + map.getName();
+                                }
+                            })
+                            .collect(Collectors.toList());
+                    suggestions.addAll(maps);
+                });
+
+        return suggestions;
+    }
+
+    /**
+     * Returns tab completion suggestions for field:value args based on the provided arguments
+     * If the last provided argument contains a ":", values for the field will be suggested if present
+     * Otherwise fields will be suggested if they do not already exist with a value in the provided arguments
+     *
+     * @param args - Array of already provided command arguments
+     * @param fields - Map of possible field names and suppliers for values
+     * @return List of tab completion suggestions
+     */
+    public List<String> getFieldValueSuggestions(String[] args, Map<String, Supplier<String[]>> fields) {
+        if (args.length == 0 || fields == null || fields.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<String> suggestions = new ArrayList<>(fields.keySet());
+        String[] lastArgument = args[args.length - 1].split(":", 2);
+
+        //If last argument is an incomplete field value, suggest matching values for that field.
+        if (lastArgument.length == 2) {
+            if (fields.containsKey(lastArgument[0])) {
+                //Don't suggest anything if the value contains a space as the client doesn't handle this well
+                if(lastArgument[1].contains(" ")) {
+                    return Collections.emptyList();
+                }
+
+                return Arrays.stream(fields.get(lastArgument[0]).get())
+                        .filter(value -> value.startsWith(lastArgument[1]))
+                        //Format suggestions as field:value, quoting the value if it contains a space
+                        .map(value -> lastArgument[0] + ":" + (value.contains(" ") ? "\"" + value + "\"" : value))
+                        .collect(Collectors.toList());
+            } else {
+                return Collections.emptyList();
+            }
+        }
+
+        //Remove fields with values in previous args from suggestions
+        for (String arg : args) {
+            String[] value = arg.split(":");
+
+            if (suggestions.contains(value[0]) && value.length == 2) {
+                suggestions.remove(value[0]);
+            }
+        }
+
+        //Suggest remaining fields
+        return suggestions.stream().
+                filter(field -> field.startsWith(args[args.length - 1]))
+                .map(field -> field + ":")
+                .collect(Collectors.toList());
+    }
+
     public boolean processCommand(DynmapCommandSender sender, String cmd, String commandLabel, String[] args) {
         if (mapManager == null) { // Initialization faulure
             sender.sendMessage("Dynmap failed to initialize properly: commands not available");
@@ -1393,7 +1592,7 @@ public class DynmapCore implements DynmapCommonAPI {
                 printCommandHelp(sender, cmd, "");
                 return true;
             }
-
+            
             if (c.equals("render") && checkPlayerPermission(sender,"render")) {
                 if (player != null) {
                     DynmapLocation loc = player.getLocation();
@@ -1593,11 +1792,11 @@ public class DynmapCore implements DynmapCommonAPI {
                 } else {
                     sender.sendMessage("World name is required");
                 }
-            } else if (c.equals("reload") && checkPlayerPermission(sender, "reload")) {
+            } /*else if (c.equals("reload") && checkPlayerPermission(sender, "reload")) {
                 sender.sendMessage("Reloading Dynmap...");
                 getServer().reload();
                 sender.sendMessage("Dynmap reloaded");
-            } else if (c.equals("stats") && checkPlayerPermission(sender, "stats")) {
+            } */else if (c.equals("stats") && checkPlayerPermission(sender, "stats")) {
                 if(args.length == 1)
                     mapManager.printStats(sender, null);
                 else
@@ -1716,8 +1915,19 @@ public class DynmapCore implements DynmapCommonAPI {
             else if(c.equals("help")) {
                 printCommandHelp(sender, cmd, (args.length > 1)?args[1]:"");
             }
+            else if(c.equals("dumpmemory") && checkPlayerPermission(sender, "dumpmemory")) {
+            	TexturePack.tallyMemory(sender);
+            }
             else if(c.equals("version")) {
                 sender.sendMessage("Dynmap version: core=" + this.getDynmapCoreVersion() + ", plugin=" + this.getDynmapPluginVersion());
+            }
+            else if (c.equals("url")) {
+            	if (publicURL.length() > 0) {
+            		sender.sendMessage("Dynmap URL for this server is: " + publicURL);
+            	}
+            	else {
+            		sender.sendMessage("URL of Dynmap not configured");
+            	}
             }
             return true;
         }
@@ -1725,6 +1935,155 @@ public class DynmapCore implements DynmapCommonAPI {
 
         return true;
     }
+
+    /**
+     * Returns a list of tab completion suggestions for the given sender, command and command arguments.
+     *
+     * @param sender - The sender of the tab completion, used for permission checks
+     * @param cmd - The top level command being tab completed
+     * @param args - Array of extra command arguments
+     * @return List of tab completion suggestions
+     */
+    public List<String> getTabCompletions(DynmapCommandSender sender, String cmd, String[] args) {
+        if (mapManager == null || args.length == 0) {
+            return Collections.emptyList();
+        }
+
+        if (args.length == 1) {
+            return getSubcommandSuggestions(sender, cmd, args[0]);
+        }
+
+        if (cmd.equalsIgnoreCase("dmap")) {
+            return dmapcmds.getTabCompletions(sender, args, this);
+        }
+
+        if (cmd.equalsIgnoreCase("dmarker")) {
+            return markerapi.getTabCompletions(sender, args, this);
+        }
+
+        if (cmd.equalsIgnoreCase("dynmapexp")) {
+            return dynmapexpcmds.getTabCompletions(sender, args, this);
+        }
+
+        if (!cmd.equalsIgnoreCase("dynmap")) {
+            return Collections.emptyList();
+        }
+
+        /* Re-parse args - handle double quotes */
+        args = parseArgs(args, sender, true);
+
+        if (args == null || args.length <= 1) {
+            return Collections.emptyList();
+        }
+
+        String subcommand = args[0];
+        DynmapPlayer player = null;
+        if (sender instanceof DynmapPlayer) {
+            player = (DynmapPlayer) sender;
+        }
+
+        if (subcommand.equals("radiusrender") && checkPlayerPermission(sender, "radiusrender")) {
+            if(args.length == 2) { // /dynmap radiusrender *<world>* <x> <z> <radius> <map>
+                return getWorldSuggestions(args[1]);
+            } if(args.length == 3 && player != null) { // /dynmap radiusrender <radius> *<mapname>*
+            	try (Scanner sc = new Scanner(args[1])) {
+            		if(sc.hasNextInt(10)) { //Only show map suggestions if a number was entered before
+            			return getMapSuggestions(player.getLocation().world, args[2], false);
+            		}
+            	}
+            } else if(args.length == 6) { // /dynmap radiusrender <world> <x> <z> <radius> *<map>*
+                return getMapSuggestions(args[1], args[5], false);
+            }
+        } else if (subcommand.equals("updaterender") && checkPlayerPermission(sender, "updaterender")) {
+            if(args.length == 2) { // /dynmap updaterender *<world>* <x> <z> <map>/*<map>*
+                List<String> suggestions = getWorldSuggestions(args[1]);
+
+                if(player != null) {
+                    suggestions.addAll(getMapSuggestions(player.getLocation().world, args[1], false));
+                }
+
+                return suggestions;
+            } else if(args.length == 5) { // /dynmap updaterender <world> <x> <z> *<map>*
+                return getMapSuggestions(args[1], args[4], false);
+            }
+        } else if (subcommand.equals("hide") && checkPlayerPermission(sender, "hide.others")) {
+            if(args.length == 2) { // /dynmap hide *<player>*
+                final String arg = args[1];
+                return playerList.getVisiblePlayers().stream()
+                        .map(DynmapPlayer::getName)
+                        .filter(name -> name.startsWith(arg))
+                        .collect(Collectors.toList());
+            }
+        } else if (subcommand.equals("show") && checkPlayerPermission(sender, "show.others")) {
+            if(args.length == 2) { // /dynmap show *<player>*
+                final String arg = args[1];
+                return playerList.getHiddenPlayers().stream()
+                        .map(DynmapPlayer::getName)
+                        .filter(name -> name.startsWith(arg))
+                        .collect(Collectors.toList());
+            }
+        } else if (subcommand.equals("fullrender") && checkPlayerPermission(sender, "fullrender")) {
+            List<String> suggestions = getWorldSuggestions(args[args.length - 1]); //World suggestions
+            suggestions.addAll(getMapSuggestions(args[args.length - 1])); //world:map suggestions
+
+            //Remove suggestions present in other arguments
+            for (String arg : args) {
+                suggestions.remove(arg.contains(" ") ? "\"" + arg + "\"" : arg);
+            }
+
+            //Add resume if previous argument wasn't resume
+            if ("resume".startsWith(args[args.length - 1])
+                    && (args.length == 2 || !args[args.length - 2].equals("resume"))) {
+                suggestions.add("resume");
+            }
+
+            return suggestions;
+        } else if ((subcommand.equals("cancelrender") && checkPlayerPermission(sender, "cancelrender"))
+                || (subcommand.equals("purgequeue") && checkPlayerPermission(sender, "purgequeue"))) {
+            List<String> suggestions = getWorldSuggestions(args[args.length - 1]);
+            suggestions.removeAll(Arrays.asList(args)); //Remove worlds present in other arguments
+
+            return suggestions;
+        } else if (subcommand.equals("purgemap") && checkPlayerPermission(sender, "purgemap")) {
+            if (args.length == 2) { // /dynmap purgemap *<world>* <map>
+                return getWorldSuggestions(args[1]);
+            } else if (args.length == 3) { // /dynmap purgemap <world> *<map>*
+                return getMapSuggestions(args[1], args[2], false);
+            }
+        } else if ((subcommand.equals("purgeworld") && checkPlayerPermission(sender, "purgeworld"))
+                || (subcommand.equals("stats") && checkPlayerPermission(sender, "stats"))
+                || (subcommand.equals("resetstats") && checkPlayerPermission(sender, "resetstats"))) {
+            if (args.length == 2) {
+                return getWorldSuggestions(args[1]);
+            }
+        } else if (subcommand.equals("pause") && checkPlayerPermission(sender, "pause")) {
+            List<String> suggestions = Arrays.asList("full", "update", "all", "none");
+
+            if (args.length == 2) {
+                final String arg = args[1];
+                return suggestions.stream().filter(suggestion -> suggestion.startsWith(arg))
+                        .collect(Collectors.toList());
+            }
+        } else if((subcommand.equals("ips-for-id") && checkPlayerPermission(sender, "ips-for-id"))
+                || (subcommand.equals("add-id-for-ip") && checkPlayerPermission(sender, "add-id-for-ip"))
+                || (subcommand.equals("del-id-for-ip") && checkPlayerPermission(sender, "del-id-for-ip"))
+                || (subcommand.equals("webregister") && checkPlayerPermission(sender, "webregister.other"))) {
+            if(args.length == 2) {
+                final String arg = args[1];
+                return Arrays.stream(playerList.getOnlinePlayers())
+                        .map(DynmapPlayer::getName)
+                        .filter(name -> name.startsWith(arg))
+                        .collect(Collectors.toList());
+            }
+        } else if(subcommand.equals("help")) {
+            if(args.length == 2) {
+                return getSubcommandSuggestions(sender, "dynmap", args[1]);
+            }
+        }
+
+        return Collections.emptyList();
+    }
+
     public boolean checkPlayerPermission(DynmapCommandSender sender, String permission) {
         if (!(sender instanceof DynmapPlayer) || sender.isOp()) {
             return true;
@@ -1819,7 +2178,7 @@ public class DynmapCore implements DynmapCommonAPI {
     
     
     public String getWebPath() {
-        return configuration.getString("webpath", "web");
+        return webpath;
     }
     
     public static void setIgnoreChunkLoads(boolean ignore) {
@@ -2296,13 +2655,59 @@ public class DynmapCore implements DynmapCommonAPI {
 
     public String getDefImageFormat() { return def_image_format; }
     
+    public String scanAndReplaceLog4JMacro(String msg) {
+    	int nestcnt = 0;
+    	int off = 0;
+    	int firsthit = -1;
+    	boolean done = false;
+    	while (!done) {
+    		int idx = msg.indexOf("${", off);	// Look for next ${
+    		if (idx >= 0) {	// Hit
+    			if (nestcnt == 0) firsthit = idx;	// Record start of hit
+    			nestcnt++;
+				off = idx + 2;
+    		}
+    		else {
+    			idx = msg.indexOf("}", off);	// Next }
+    			if (idx >= 0) {
+    				if (nestcnt > 0) {
+    					nestcnt--;
+    					if ((nestcnt == 0) && (firsthit >= 0)) {	// If back to zero, time to strip it
+    						String newmsg = msg.substring(0, firsthit) + hackAttemptSub + msg.substring(idx+1);
+    						msg = newmsg;	// Switch to new version, and restart
+    						off = 0;
+    						firsthit = -1;	// And restart scan
+    					}
+    				}
+    				off = idx + 1;
+    			}
+    			else {	// At end without a close
+    				if (firsthit >= 0) {	// Open strip?
+						String newmsg = msg.substring(0, firsthit) + hackAttemptSub;	// Replace rest
+						msg = newmsg;	// Switch to new version, and restart    					
+    				}
+    				done = true;
+    			}
+    		}
+    	}
+    	return msg;
+    }
     public void webChat(final String name, final String message) {
         if(mapManager == null)
             return;
+        // Check for folks trying to exploit Log4J
+        final String cleanname = scanAndReplaceLog4JMacro(name);
+        final String cleanmsg = scanAndReplaceLog4JMacro(message);
+        if (!cleanname.equals(name)) {
+        	Log.severe("Possible hack attempt blocked: name contains Log4J macro - " + name.replaceAll("\\$", "_"));
+        }
+        if (!cleanmsg.equals(message)) {
+        	Log.severe("Possible hack attempt blocked: message contains Log4J macro (from " + cleanname + ") - " + message.replaceAll("\\$", "_"));        	
+        }
         Runnable c = new Runnable() {
             @Override
             public void run() {
-                ChatEvent event = new ChatEvent("web", name, message);
+                ChatEvent event = new ChatEvent("web", cleanname, cleanmsg);
                 events.trigger("webchat", event);
             }
         };
@@ -2400,7 +2805,7 @@ public class DynmapCore implements DynmapCommonAPI {
         return platformVersion;
     }
     
-    private static boolean deleteDirectory(File dir) {
+    public static boolean deleteDirectory(File dir) {
         File[] files = dir.listFiles();
         if (files != null) {
             for (File f : files) {
@@ -2420,8 +2825,11 @@ public class DynmapCore implements DynmapCommonAPI {
         File df = this.getDataFolder();
         if(df.exists() == false) df.mkdirs();
         File ver = new File(df, "version.txt");
+        File wpath = this.getFile(this.getWebPath());
+        File webver = new File(wpath, "version.txt");
         String prevver = "1.6";
-        if(ver.exists()) {
+        String prevwebver = "1.6";
+        if (ver.exists()) {
             Reader ir = null;
             try {
                 ir = new FileReader(ver);
@@ -2437,17 +2845,34 @@ public class DynmapCore implements DynmapCommonAPI {
                 }
             }
         }
-        else {  // First time, delete old external texture pack
-            deleteDirectory(new File(df, "texturepacks/standard"));
+        if (webver.exists()) {
+            Reader ir = null;
+            try {
+                ir = new FileReader(webver);
+                prevwebver = "";
+                int c;
+                while((c = ir.read()) >= 0) {
+                    prevwebver += (char)c;
+                }
+            } catch (IOException iox) {
+            } finally {
+                if(ir != null) {
+                    try { ir.close(); } catch (IOException iox) {}
+                }
+            }
         }
         String curver = this.getDynmapCoreVersion();
         /* If matched, we're good */
-        if (prevver.equals(curver) && (!curver.endsWith(("-Dev")))) {
+        if (prevver.equals(curver) && prevwebver.equals(curver) && (!curver.endsWith(("-Dev")))) {
             return;
+        }
+        // If doing update and web path update is disabled, send warning
+        if (!this.updatewebpathfiles) {
+        	Log.warning("Update of web interface is disabled, and update is available - UI may not function without updates");
         }
         /* Get deleted file list */
         InputStream in = getClass().getResourceAsStream("/deleted.txt");
-        if(in != null) {
+        if (in != null) {
             try {
                 BufferedReader br = new BufferedReader(new InputStreamReader(in));
                 String line;
@@ -2463,7 +2888,6 @@ public class DynmapCore implements DynmapCommonAPI {
                 try { in.close(); } catch (IOException x) {}
             }
         }
-
         /* Open JAR as ZIP */
         ZipFile zf = null;
         FileOutputStream fos = null;
@@ -2477,13 +2901,26 @@ public class DynmapCore implements DynmapCommonAPI {
             while (e.hasMoreElements()) {
                 ZipEntry ze = e.nextElement();
                 n = ze.getName();
-                if(!n.startsWith("extracted/")) continue;
+                if (!n.startsWith("extracted/")) {
+                	continue;
+                }
                 n = n.substring("extracted/".length());
-                f = new File(df, n);
+                // If file is going to web path, redirect it to the configured web
+                if (n.startsWith("web/")) {
+                	// Don't update unless we are allowed to
+                	if (!updatewebpathfiles) {
+                		continue;
+                	}
+            		f = new File(wpath, n.substring("web/".length()));            
+                }
+                else {
+                	f = new File(df, n);
+                }
                 if(ze.isDirectory()) {
                     f.mkdirs();
                 }
                 else {
+                	try {
                     f.getParentFile().mkdirs();
                     fos = new FileOutputStream(f);
                     ins = zf.getInputStream(ze);
@@ -2491,10 +2928,18 @@ public class DynmapCore implements DynmapCommonAPI {
                     while ((len = ins.read(buf)) >= 0) {
                         fos.write(buf,  0,  len);
                     }
-                    ins.close();
-                    ins = null;
-                    fos.close();
-                    fos = null;
+                	} catch(IOException io) {
+                        Log.severe("Error updating file - " + f.getPath(), io);                		
+                	} finally {
+                		if (ins != null) {
+                			ins.close();
+                			ins = null;
+                		}
+                		if (fos != null) {
+                			fos.close();
+                			fos = null;
+                		}
+                	}
                 }
             }
         } catch (IOException iox) {
@@ -2514,7 +2959,7 @@ public class DynmapCore implements DynmapCommonAPI {
             }
         }
         
-        /* Finally, write new version cookie */
+        /* Finally, write new version cookie to both data folder and web folder*/
         Writer out = null;
         try {
             out = new FileWriter(ver);
@@ -2525,7 +2970,21 @@ public class DynmapCore implements DynmapCommonAPI {
                 try { out.close(); } catch (IOException iox) {}
             }
         }
-        Log.info("Extracted files upgraded");
+        if (this.updatewebpathfiles) {
+	        try {
+	            out = new FileWriter(webver);
+	            out.write(this.getDynmapCoreVersion());
+	        } catch (IOException iox) {
+	        } finally {
+	            if(out != null) {
+	                try { out.close(); } catch (IOException iox) {}
+	            }
+	        }
+	        Log.info("Extracted files upgraded");
+        }
+        else {
+            Log.info("Extracted files upgraded (excluding webpath files)");
+        }
     }
     // Server thread tick : nominally, once per 20 Hz tick
     public void serverTick(double tps) {

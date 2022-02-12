@@ -6,9 +6,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.dynmap.Client;
 import org.dynmap.ConfigurationNode;
 import org.dynmap.DynmapWorld;
-import org.dynmap.Log;
 import org.dynmap.MapManager;
 import org.dynmap.hdmap.HDPerspective;
 import org.dynmap.markers.AreaMarker;
@@ -72,9 +72,9 @@ class AreaMarkerImpl implements AreaMarker, EnterExitMarker {
     AreaMarkerImpl(String id, String lbl, boolean markup, String world, double x[], double z[], boolean persistent, MarkerSetImpl set) {
         markerid = id;
         if(lbl != null)
-            label = lbl;
+            label = markup ? lbl : Client.encodeForHTML(lbl);
         else
-            label = id;
+            label = markup ? id : Client.encodeForHTML(id);
         this.markup = markup;
         this.corners = new ArrayList<Coord>();
         for(int i = 0; i < x.length; i++) {
@@ -104,7 +104,7 @@ class AreaMarkerImpl implements AreaMarker, EnterExitMarker {
     AreaMarkerImpl(String id, MarkerSetImpl set) {
         markerid = id;
         markerset = set;
-        label = id;
+        label = Client.encodeForHTML(id);
         markup = false;
         desc = null;
         corners = new ArrayList<Coord>();
@@ -119,8 +119,8 @@ class AreaMarkerImpl implements AreaMarker, EnterExitMarker {
      *  @param node - configuration node
      */
     boolean loadPersistentData(ConfigurationNode node) {
-        label = node.getString("label", markerid);
         markup = node.getBoolean("markup", false);
+        label = MarkerAPIImpl.escapeForHTMLIfNeeded(node.getString("label", markerid), markup);
         ytop = node.getDouble("ytop", 64.0);
         ybottom = node.getDouble("ybottom", 64.0);
         List<Double> xx = node.getList("x");
@@ -215,7 +215,12 @@ class AreaMarkerImpl implements AreaMarker, EnterExitMarker {
     @Override
     public void setLabel(String lbl, boolean markup) {
         if(markerset == null) return;
-        label = lbl;
+        if (markup) {
+        	label = lbl;
+        }
+        else {	// If not markup, escape any HTML-active characters (<>&"')
+        	label = Client.encodeForHTML(lbl);
+        }
         this.markup = markup;
         MarkerAPIImpl.areaMarkerUpdated(this, MarkerUpdate.UPDATED);
         if(ispersistent)
@@ -509,14 +514,14 @@ class AreaMarkerImpl implements AreaMarker, EnterExitMarker {
                     bb.yp[i] = v2.y;
                 }
             }
-            //System.out.println("x=" + bb.xmin + " - " + bb.xmax + ",  y=" + bb.ymin + " - " + bb.ymax);
+            //Log.info("x=" + bb.xmin + " - " + bb.xmax + ",  y=" + bb.ymin + " - " + bb.ymax);
             bbc.put(perspective.getName(), bb);
             bb_cache = bbc;
         }
         final double tile_x2 = tile_x + tile_dim;
         final double tile_y2 = tile_y + tile_dim;
         if ((bb.xmin > tile_x2) || (bb.xmax < tile_x) || (bb.ymin > tile_y2) || (bb.ymax < tile_y)) {
-            //System.out.println("tile: " + tile_x + " / " + tile_y + " - miss");
+            //Log.info("tile: " + tile_x + " / " + tile_y + " - miss");
             return false;
         }
         final int cnt = bb.xp.length;
@@ -546,7 +551,7 @@ class AreaMarkerImpl implements AreaMarker, EnterExitMarker {
         //    // Test for X=tile_x side
         //    if ((px[i] < tile_x) && (px[j] >= tile_x) && ()
         // }
-        //System.out.println("tile: " + tile_x + " / " + tile_y + " - hit");
+        //Log.info("tile: " + tile_x + " / " + tile_y + " - hit");
         return false;
     }
     @Override

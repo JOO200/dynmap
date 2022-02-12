@@ -108,10 +108,12 @@ public class PlayerFaces {
     private class LoadPlayerImages implements Runnable {
         private SkinUrlProvider mSkinUrlProvider;
         public final String playername;
+        public final UUID playeruuid;
         public final String playerskinurl;
 
         public LoadPlayerImages(String playername, String playerskinurl, UUID playeruuid, SkinUrlProvider skinUrlProvider) {
             this.playername = playername;
+            this.playeruuid = playeruuid;
             this.playerskinurl = playerskinurl;
             mSkinUrlProvider = skinUrlProvider;
         }
@@ -131,7 +133,8 @@ public class PlayerFaces {
 
                     if (mSkinUrlProvider == null) {
                         if (!skinurl.equals("")) {
-                            url = new URL(skinurl.replace("%player%", URLEncoder.encode(playername, "UTF-8")));
+                            url = new URL(skinurl.replace("%player%", URLEncoder.encode(playername, "UTF-8"))
+                                                  .replace("%uuid%", playeruuid.toString()));
                         } else if (playerskinurl != null) {
                             url = new URL(playerskinurl);
                         }
@@ -171,7 +174,6 @@ public class PlayerFaces {
             // Copy face and overlay to icon
             copyLayersToTarget(img, 8*scale, 8*scale, 40*scale, 8*scale, 8*scale, 8*scale, faceOriginal, 0, 8*scale);
 
-            int[] faceaccessory = new int[64];  /* 8x8 of face accessory */
             /* Get buffered image for face at 8x8 */
             DynmapBufferedImage face8x8 = DynmapBufferedImage.allocateBufferedImage(8, 8);
             Image face8x8_image =  faceOriginal.getScaledInstance(8,8,BufferedImage.SCALE_SMOOTH);
@@ -301,10 +303,7 @@ public class PlayerFaces {
             @Override
             public void playerEvent(DynmapPlayer p) {
                 Runnable job = new LoadPlayerImages(p.getName(), p.getSkinURL(), p.getUUID(), core.skinUrlProvider);
-                if(fetchskins)
-                    MapManager.scheduleDelayedJob(job, 0);
-                else
-                    job.run();
+                MapManager.scheduleDelayedJob(job, 0);
             }
         });
         storage = core.getDefaultMapStorage();

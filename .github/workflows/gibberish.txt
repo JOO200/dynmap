@@ -51,3 +51,7 @@ subreddit
 gg
 pqBpw
 JDBC
+JDK
+ForgeGradle
+Kosma
+Kosma's

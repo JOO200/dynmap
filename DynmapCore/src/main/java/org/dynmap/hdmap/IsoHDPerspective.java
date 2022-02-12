@@ -45,6 +45,7 @@ public class IsoHDPerspective implements HDPerspective {
     private final int hashcode;
     /* View angles */
     public final double azimuth;  /* Angle in degrees from looking north (0), east (90), south (180), or west (270) */
+    public final double compassazimuth;	// Angle in degrees from looking north (0), east (90), for the compass (default same as azimuth)
     public final double inclination;  /* Angle in degrees from horizontal (0) to vertical (90) */
     public final double maxheight;
     public final double minheight;
@@ -79,6 +80,9 @@ public class IsoHDPerspective implements HDPerspective {
 
     private static final BlockStep [] semi_steps = { BlockStep.Y_PLUS, BlockStep.X_MINUS, BlockStep.X_PLUS, BlockStep.Z_MINUS, BlockStep.Z_PLUS };
     
+    // Cache for custom meshes by state (shared, reusable)
+    private static RenderPatch[][] custom_meshes_by_globalstateindex = null;
+
     private class OurPerspectiveState implements HDPerspectiveState {
         DynmapBlockState blocktype = DynmapBlockState.AIR;
         DynmapBlockState lastblocktype = DynmapBlockState.AIR;
@@ -124,19 +128,20 @@ public class IsoHDPerspective implements HDPerspective {
         double patch_t[] = new double[2*HDBlockModels.getMaxPatchCount()];
         double patch_u[] = new double[2*HDBlockModels.getMaxPatchCount()];
         double patch_v[] = new double[2*HDBlockModels.getMaxPatchCount()];
+        boolean patch_shade[] = new boolean[2*HDBlockModels.getMaxPatchCount()];
         BlockStep patch_step[] = new BlockStep[2*HDBlockModels.getMaxPatchCount()];
         int patch_id[] = new int[2*HDBlockModels.getMaxPatchCount()];
         int cur_patch = -1;
         double cur_patch_u;
         double cur_patch_v;
         double cur_patch_t;
+        boolean cur_shade;
         
         int[] subblock_xyz = new int[3];
         final MapIterator mapiter;
         final boolean isnether;
         boolean skiptoair;
         final int worldheight;
-        final int heightmask;
         final LightLevels llcache[];
         
         /* Cache for custom model patch lists */
@@ -147,14 +152,11 @@ public class IsoHDPerspective implements HDPerspective {
             mapiter = mi;
             this.isnether = isnether;
             worldheight = mapiter.getWorldHeight();
-            int shift;
-            for(shift = 0; (1<<shift) < worldheight; shift++) {}
-            heightmask = (1<<shift) - 1;
             llcache = new LightLevels[4];
             for(int i = 0; i < llcache.length; i++)
                 llcache[i] = new LightLevels();
-            custom_meshes = new DynLongHashMap();
-            custom_fluid_meshes = new DynLongHashMap();
+            custom_meshes = new DynLongHashMap(4096);
+            custom_fluid_meshes = new DynLongHashMap(4096);
             modscale = basemodscale << scaled;
             scalemodels = HDBlockModels.getModelsForScale(basemodscale << scaled);
         }
@@ -162,13 +164,9 @@ public class IsoHDPerspective implements HDPerspective {
         private final void updateSemitransparentLight(LightLevels ll) {
         	int emitted = 0, sky = 0;
         	for(int i = 0; i < semi_steps.length; i++) {
-        	    BlockStep s = semi_steps[i];
-        		mapiter.stepPosition(s);
-        		int v = mapiter.getBlockEmittedLight();
-        		if(v > emitted) emitted = v;
-        		v = mapiter.getBlockSkyLight();
-        		if(v > sky) sky = v;
-        		mapiter.unstepPosition(s);
+        		int emit_sky_light = mapiter.getBlockLight(semi_steps[i]);
+        		if ((emit_sky_light >> 8) > emitted) emitted = (emit_sky_light >> 8);
+        		if ((emit_sky_light & 0xF) > sky) sky = (emit_sky_light & 0xF);
         	}
         	ll.sky = sky;
         	ll.emitted = emitted;
@@ -185,16 +183,10 @@ public class IsoHDPerspective implements HDPerspective {
             		ll.emitted = mapiter.getBlockEmittedLight();
             		break;
             	case OPAQUE:
-        			if(HDBlockStateTextureMap.getTransparency(lastblocktype) != BlockTransparency.SEMITRANSPARENT) {
-                		mapiter.unstepPosition(laststep);  /* Back up to block we entered on */
-                		if(mapiter.getY() < worldheight) {
-                		    ll.sky = mapiter.getBlockSkyLight();
-                		    ll.emitted = mapiter.getBlockEmittedLight();
-                		} else {
-                		    ll.sky = 15;
-                		    ll.emitted = 0;
-                		}
-                		mapiter.stepPosition(laststep);
+        			if (HDBlockStateTextureMap.getTransparency(lastblocktype) != BlockTransparency.SEMITRANSPARENT) {
+        				int emit_sky_light = mapiter.getBlockLight(laststep.opposite());
+            		    ll.sky = emit_sky_light & 0xF;
+            		    ll.emitted = emit_sky_light >> 8;
         			}
         			else {
                 		mapiter.unstepPosition(laststep);  /* Back up to block we entered on */
@@ -417,6 +409,8 @@ public class IsoHDPerspective implements HDPerspective {
             /* If parallel to surface, no intercept */
             switch(pd.sidevis) {
                 case TOP:
+                case TOPFLIP:
+                case TOPFLIPV:
                     if (det < 0.000001) {
                         return hitcnt;
                     }
@@ -460,9 +454,16 @@ public class IsoHDPerspective implements HDPerspective {
                 patch_t[hitcnt] = t;
                 patch_u[hitcnt] = u;
                 patch_v[hitcnt] = v;
+                patch_shade[hitcnt] = pd.shade;
                 patch_id[hitcnt] = pd.textureindex;
                 if(det > 0) {
                     patch_step[hitcnt] = pd.step.opposite();
+                    if (pd.sidevis == SideVisible.TOPFLIP) {
+                        patch_u[hitcnt] = 1 - u;
+                    }
+                    else if (pd.sidevis == SideVisible.TOPFLIPV) {
+                        patch_v[hitcnt] = 1 - v;                    	
+                    }
                 }
                 else {
                     if (pd.sidevis == SideVisible.FLIP) {
@@ -516,6 +517,7 @@ public class IsoHDPerspective implements HDPerspective {
                 cur_patch = patch_id[best_patch]; /* Mark this as current patch */
                 cur_patch_u = patch_u[best_patch];
                 cur_patch_v = patch_v[best_patch];
+                cur_shade = patch_shade[best_patch];
                 laststep = patch_step[best_patch];
                 cur_patch_t = best_t;
                 // If the water patch, switch to water state and patch index
@@ -568,7 +570,15 @@ public class IsoHDPerspective implements HDPerspective {
                             this.setCustomFluidMesh(patches);
                         }
                     }
-                    else {
+                    // Else, if block state specific model
+                    else if (cbm.isOnlyBlockStateSensitive()) {
+                    	patches = this.getCustomMeshForState(bt);	// Look up mesh by state
+                    	if (patches == null) {	// Miss, generate it
+                            patches = cbm.getMeshForBlock(mapiter);
+                            this.setCustomMeshForState(bt, patches);
+                    	}
+                    }
+                    else {	// Else, block specific
                         patches = this.getCustomMesh();
                         if (patches == null) {
                             patches = cbm.getMeshForBlock(mapiter);
@@ -627,6 +637,7 @@ public class IsoHDPerspective implements HDPerspective {
         
         /* Skip empty : return false if exited */
         private final boolean raytraceSkipEmpty(MapChunkCache cache) {
+        	int minsy = cache.getWorld().minY >> 4;
             while(cache.isEmptySection(sx, sy, sz)) {
                 /* If Y step is next best */
                 if((st_next_y <= st_next_x) && (st_next_y <= st_next_z)) {
@@ -634,7 +645,7 @@ public class IsoHDPerspective implements HDPerspective {
                     t = st_next_y;
                     st_next_y += sdt_dy;
                     laststep = stepy;
-                    if(sy < 0)
+                    if (sy < minsy)
                         return false;
                 }
                 /* If X step is next best */
@@ -658,7 +669,7 @@ public class IsoHDPerspective implements HDPerspective {
         /**
          * Step block iterator: false if done
          */
-        private final boolean raytraceStepIterator() {
+        private final boolean raytraceStepIterator(int miny, int maxy) {
             /* If Y step is next best */
             if ((t_next_y <= t_next_x) && (t_next_y <= t_next_z)) {
                 y += y_inc;
@@ -667,7 +678,7 @@ public class IsoHDPerspective implements HDPerspective {
                 laststep = stepy;
                 mapiter.stepPosition(laststep);
                 /* If outside 0-(height-1) range */
-                if((y & (~heightmask)) != 0) {
+                if ((y < miny) || (y > maxy)) {
                     return false;
                 }
             }
@@ -694,6 +705,9 @@ public class IsoHDPerspective implements HDPerspective {
          * Trace ray, based on "Voxel Tranversal along a 3D line"
          */
         private final void raytrace(MapChunkCache cache, HDShaderState[] shaderstate, boolean[] shaderdone) {
+        	int minY = cache.getWorld().minY;
+        	int height = cache.getWorld().worldheight;
+        	
             /* Initialize raytrace state variables */
             raytrace_init();
 
@@ -703,7 +717,7 @@ public class IsoHDPerspective implements HDPerspective {
             
             raytrace_section_init();
             
-            if (y < 0)
+            if (y < minY)
                 return;
             
             mapiter.initialize(x, y, z);
@@ -712,7 +726,7 @@ public class IsoHDPerspective implements HDPerspective {
         		if (visit_block(shaderstate, shaderdone)) {
                     return;
                 }
-        		if (!raytraceStepIterator()) {
+        		if (!raytraceStepIterator(minY, height)) {
         		    return;
         		}
             }
@@ -895,7 +909,7 @@ public class IsoHDPerspective implements HDPerspective {
          * Get current texture index
          */
         @Override
-        public int getTextureIndex() {
+        public final int getTextureIndex() {
             return cur_patch;
         }
 
@@ -903,7 +917,7 @@ public class IsoHDPerspective implements HDPerspective {
          * Get current U of patch intercept
          */
         @Override
-        public double getPatchU() {
+        public final double getPatchU() {
             return cur_patch_u;
         }
 
@@ -911,10 +925,19 @@ public class IsoHDPerspective implements HDPerspective {
          * Get current V of patch intercept
          */
         @Override
-        public double getPatchV() {
+        public final double getPatchV() {
             return cur_patch_v;
         }
+
         /**
+         * Get current patch noShadow setting (true = no shadows/lighting)
+         */
+        @Override
+        public final boolean getShade() {
+        	// Shade if shade set OR not patch
+            return cur_shade || (cur_patch < 0);    /* If patch hit */
+        }
+/**
          * Light level cache
          * @param index of light level (0-3)
          */
@@ -930,11 +953,23 @@ public class IsoHDPerspective implements HDPerspective {
             return (RenderPatch[])custom_meshes.get(key);
         }
         /**
+         * Get custom mesh for block, if defined (null if not)
+         */
+        public final RenderPatch[] getCustomMeshForState(DynmapBlockState bs) {
+            return (RenderPatch[]) custom_meshes_by_globalstateindex[bs.globalStateIndex];
+        }
+        /**
          * Save custom mesh for block
          */
         public final void setCustomMesh(RenderPatch[] mesh) {
             long key = this.mapiter.getBlockKey();  /* Get key for current block */
             custom_meshes.put(key,  mesh);
+        }
+        /**
+         * Set custom mesh for block, if defined (null if not)
+         */
+        public final void setCustomMeshForState(DynmapBlockState bs, RenderPatch[] mesh) {
+            custom_meshes_by_globalstateindex[bs.globalStateIndex] = mesh;
         }
         /**
          * Get custom fluid mesh for block, if defined (null if not)
@@ -953,6 +988,9 @@ public class IsoHDPerspective implements HDPerspective {
     }
     
     public IsoHDPerspective(DynmapCore core, ConfigurationNode configuration) {
+    	if (custom_meshes_by_globalstateindex == null) {
+    		custom_meshes_by_globalstateindex = new RenderPatch[DynmapBlockState.getGlobalIndexMax()][];
+    	}
         name = configuration.getString("name", null);
         if(name == null) {
             Log.severe("Perspective definition missing name - must be defined and unique");
@@ -962,10 +1000,17 @@ public class IsoHDPerspective implements HDPerspective {
             hashcode = name.hashCode();
         }
         double az = 90.0 + configuration.getDouble("azimuth", 135.0);    /* Get azimuth (default to classic kzed POV) */
-        if(az >= 360.0) {
+        if (az >= 360.0) {
             az = az - 360.0;
         }
         azimuth = az;
+        // Get compass azimuth - default to same as true azimuth, but allows for override
+        az = 90.0 + configuration.getDouble("compassazimuth", az - 90.0);    /* Get azimuth (default to classic kzed POV) */
+        if (az >= 360.0) {
+            az = az - 360.0;
+        }
+        compassazimuth = az;
+        
         double inc;
         inc = configuration.getDouble("inclination", 60.0);
         if(inc > MAX_INCLINATION) inc = MAX_INCLINATION;
@@ -976,11 +1021,9 @@ public class IsoHDPerspective implements HDPerspective {
         if(mscale > MAX_SCALE) mscale = MAX_SCALE;
         basemodscale = mscale;
         /* Get max and min height */
-        maxheight = configuration.getInteger("maximumheight", -1);
+        maxheight = configuration.getInteger("maximumheight", Integer.MIN_VALUE);
         
-        int minh = configuration.getInteger("minimumheight", 0);
-        if(minh < 0) minh = 0;
-        minheight = minh;
+        minheight = configuration.getInteger("minimumheight", Integer.MIN_VALUE);
         /* Generate transform matrix for world-to-tile coordinate mapping */
         /* First, need to fix basic coordinate mismatches before rotation - we want zero azimuth to have north to top
          * (world -X -> tile +Y) and east to right (world -Z to tile +X), with height being up (world +Y -> tile +Z)
@@ -1129,7 +1172,9 @@ public class IsoHDPerspective implements HDPerspective {
             for(int y = t.ty; y <= (t.ty+1); y++) {
                 for(int z = 0; z <= 1; z++) {
                     corners[idx] = new Vector3D();
-                    corners[idx].x = x*tileWidth + dx; corners[idx].y = y*tileHeight + dy; corners[idx].z = z*t.getDynmapWorld().worldheight;
+                    corners[idx].x = x*tileWidth + dx;
+                    corners[idx].y = y*tileHeight + dy;
+                    corners[idx].z = (z == 1) ? t.getDynmapWorld().worldheight : t.getDynmapWorld().minY;
                     map_to_world.transform(corners[idx]);
                     /* Compute chunk coordinates of corner */
                     int cx = fastFloor(corners[idx].x / 16);
@@ -1178,6 +1223,7 @@ public class IsoHDPerspective implements HDPerspective {
 
     @Override
     public boolean render(MapChunkCache cache, HDMapTile tile, String mapname) {
+        final long startTimestamp = System.currentTimeMillis();
         Color rslt = new Color();
         MapIterator mapiter = cache.getIterator(0, 0, 0);
         DynmapWorld world = tile.getDynmapWorld();
@@ -1233,19 +1279,23 @@ public class IsoHDPerspective implements HDPerspective {
         boolean shaderdone[] = new boolean[numshaders];
         boolean rendered[] = new boolean[numshaders];
         double height = maxheight;
-        if(height < 0) {    /* Not set - assume world height - 1 */
+        if (height == Integer.MIN_VALUE) {    /* Not set - assume world height - 1 */
             if (isnether)
                 height = 127;
             else
                 height = tile.getDynmapWorld().worldheight - 1;
         }
+        double miny = minheight;
+        if (miny == Integer.MIN_VALUE) {    /* Not set - assume world height - 1 */
+        	miny = tile.getDynmapWorld().minY;
+        }
         
         for(int x = 0; x < tileWidth * sizescale; x++) {
             ps.px = x;
             for(int y = 0; y < tileHeight * sizescale; y++) {
-                ps.top.x = ps.bottom.x = xbase + ((double)x)/sizescale + 0.5;    /* Start at center of pixel at Y=height+0.5, bottom at Y=-0.5 */
-                ps.top.y = ps.bottom.y = ybase + ((double)y)/sizescale + 0.5;
-                ps.top.z = height + 0.5; ps.bottom.z = minheight - 0.5;
+                ps.top.x = ps.bottom.x = xbase + (x + 0.5) / sizescale;    /* Start at center of pixel at Y=height+0.5, bottom at Y=-0.5 */
+                ps.top.y = ps.bottom.y = ybase + (y + 0.5) / sizescale;
+                ps.top.z = height + 0.5; ps.bottom.z = miny - 0.5;
                 map_to_world.transform(ps.top);            /* Transform to world coordinates */
                 map_to_world.transform(ps.bottom);
                 ps.direction.set(ps.bottom);
@@ -1258,6 +1308,7 @@ public class IsoHDPerspective implements HDPerspective {
                     ps.raytrace(cache, shaderstate, shaderdone);
                 } catch (Exception ex) {
                     Log.severe("Error while raytracing tile: perspective=" + this.name + ", coord=" + mapiter.getX() + "," + mapiter.getY() + "," + mapiter.getZ() + ", blockid=" + mapiter.getBlockType() + ", lighting=" + mapiter.getBlockSkyLight() + ":" + mapiter.getBlockEmittedLight() + ", biome=" + mapiter.getBiome().toString(), ex);
+                    ex.printStackTrace();
                 }
                 for(int i = 0; i < numshaders; i++) {
                     if(shaderdone[i] == false) {
@@ -1305,7 +1356,7 @@ public class IsoHDPerspective implements HDPerspective {
                 if(mtile.matchesHashCode(crc) == false) {
                     /* Wrap buffer as buffered image */
                     if(rendered[i]) {   
-                        mtile.write(crc, im[i].buf_img);
+                        mtile.write(crc, im[i].buf_img, startTimestamp);
                     }
                     else {
                         mtile.delete();
@@ -1336,7 +1387,7 @@ public class IsoHDPerspective implements HDPerspective {
                     if(mtile.matchesHashCode(crc) == false) {
                         /* Wrap buffer as buffered image */
                         if(rendered[i]) {
-                            mtile.write(crc, dayim[i].buf_img);
+                            mtile.write(crc, dayim[i].buf_img, startTimestamp);
                         }
                         else {
                             mtile.delete();
@@ -1404,7 +1455,7 @@ public class IsoHDPerspective implements HDPerspective {
         s(mapObject, "scale", basemodscale);
         s(mapObject, "worldtomap", world_to_map.toJSON());
         s(mapObject, "maptoworld", map_to_world.toJSON());
-        int dir = (((360 + (int)(22.5+azimuth)) / 45) + 6) % 8;
+        int dir = (((360 + (int)(22.5+compassazimuth)) / 45) + 6) % 8;
         s(mapObject, "compassview", directions[dir]);
     }
     

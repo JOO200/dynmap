@@ -5,8 +5,10 @@ import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -54,6 +56,7 @@ import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.registry.Registry;
 import net.minecraft.util.text.ITextComponent;
 import net.minecraft.util.text.StringTextComponent;
+import net.minecraft.world.EmptyBlockReader;
 import net.minecraft.world.IBlockReader;
 import net.minecraft.world.IWorld;
 import net.minecraft.world.World;
@@ -85,8 +88,6 @@ import net.minecraftforge.fml.loading.moddiscovery.ModFileInfo;
 import net.minecraftforge.fml.loading.moddiscovery.ModInfo;
 import net.minecraftforge.forgespi.language.IModInfo;
 
-import org.apache.commons.codec.Charsets;
-import org.apache.commons.codec.binary.Base64;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.maven.artifact.versioning.ArtifactVersion;
@@ -222,6 +223,7 @@ public class DynmapPlugin
         int baseidx = 0;
     	
     	Iterator<BlockState> iter = bsids.iterator();
+    	DynmapBlockState.Builder bld = new DynmapBlockState.Builder();
 		while (iter.hasNext()) {
 			BlockState bs = iter.next();
 			int idx = bsids.get(bs);
@@ -253,25 +255,20 @@ public class DynmapPlugin
                 	}
                 	statename += p.getName() + "=" + bs.get(p).toString();
                 }
-                //Log.info("bn=" + bn + ", statenme=" + statename + ",idx=" + idx + ",baseidx=" + baseidx);
-                DynmapBlockState dbs = new DynmapBlockState(basebs, idx - baseidx, bn, statename, mat.toString(), idx);
+                int lightAtten = bs.isOpaqueCube(EmptyBlockReader.INSTANCE, BlockPos.ZERO) ? 15 : (bs.propagatesSkylightDown(EmptyBlockReader.INSTANCE, BlockPos.ZERO) ? 0 : 1);
+                //Log.info("statename=" + bn + "[" + statename + "], lightAtten=" + lightAtten);
+                // Fill in base attributes
+                bld.setBaseState(basebs).setStateIndex(idx - baseidx).setBlockName(bn).setStateName(statename).setMaterial(mat.toString()).setLegacyBlockID(idx).setAttenuatesLight(lightAtten);
+				if (mat.isSolid()) { bld.setSolid(); }
+				if (mat == Material.AIR) { bld.setAir(); }
+				if (mat == Material.WOOD) { bld.setLog(); }
+				if (mat == Material.LEAVES) { bld.setLeaves(); }
+				if ((!bs.getFluidState().isEmpty()) && !(bs.getBlock() instanceof FlowingFluidBlock)) {
+					bld.setWaterlogged();
+				}
+                DynmapBlockState dbs = bld.build(); // Build state
                 stateByID[idx] = dbs;
                 if (basebs == null) { basebs = dbs; }
-                if (mat.isSolid()) {
-                    dbs.setSolid();
-                }
-                if (mat == Material.AIR) {
-                    dbs.setAir();
-                }
-                if (mat == Material.WOOD) {
-                    dbs.setLog();
-                }
-                if (mat == Material.LEAVES) {
-                    dbs.setLeaves();
-                }
-                if ((!bs.getFluidState().isEmpty()) && !(bs.getBlock() instanceof FlowingFluidBlock)) {
-                    dbs.setWaterlogged();
-                }
             }
     	}
         for (int gidx = 0; gidx < DynmapBlockState.getGlobalIndexMax(); gidx++) {
@@ -902,6 +899,9 @@ public class DynmapPlugin
             catch (CancellationException cx) {
                 return null;
             }
+            catch (InterruptedException cx) {
+                return null;
+            }
             catch (ExecutionException xx) {
                 Log.severe("Exception while loading chunks", xx.getCause());
                 return null;
@@ -1140,7 +1140,7 @@ public class DynmapPlugin
         	        if (textureProperty != null) {
         	        	TexturesPayload result = null;
         	        	try {
-        	        		String json = new String(Base64.decodeBase64(textureProperty.getValue()), Charsets.UTF_8);
+                            String json = new String(Base64.getDecoder().decode(textureProperty.getValue()), StandardCharsets.UTF_8);
         	        		result = gson.fromJson(json, TexturesPayload.class);
         	        	} catch (JsonParseException e) {
         	        	}
@@ -1494,7 +1494,7 @@ public class DynmapPlugin
     
     private static int test(CommandSource source) throws CommandSyntaxException
 	{
-        System.out.println(source.toString());
+    	Log.warning(source.toString());
 		return 1;
     }
     

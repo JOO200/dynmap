@@ -80,7 +80,8 @@ public class ConfigurationNode implements Map<String, Object> {
     @SuppressWarnings("unchecked")
     public boolean load() {
         initparse();
-
+        // If no file to read, just return false
+        if (!f.canRead()) { return false; }
         FileInputStream fis = null;
         try {
             fis = new FileInputStream(f);
@@ -138,9 +139,11 @@ public class ConfigurationNode implements Map<String, Object> {
     public Object getObject(String path) {
         if (path.isEmpty())
             return entries;
+        // Try get first (in case '/' is legit part
+        Object v = get(path);
         int separator = path.indexOf('/');
-        if (separator < 0)
-            return get(path);
+        if ((v != null) || (separator < 0)) return v;
+        
         String localKey = path.substring(0, separator);
         Object subvalue = get(localKey);
         if (subvalue == null)

@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 // This represents a distinct block state value for a simple block from the world data.
@@ -25,9 +26,12 @@ public class DynmapBlockState {
     public final int globalStateIndex;
     // Legacy block ID (if defined - otherwise -1)
     public final int legacyBlockID;
+    // Light attenuation level (levels dropped when light tries to pass through block)
+    public int lightAttenuation;
     // List of block states (only defined on base block), indexed by stateIndex (null if single state base block)
     private DynmapBlockState[] states;
     private int stateLastIdx = 0;
+    private ConcurrentHashMap<String, DynmapBlockState> lookup;
     // Full name for state (base name, or base name[state name])
     private final String fullName;
     // Material string
@@ -44,7 +48,6 @@ public class DynmapBlockState {
     private static int MATCH_WATERLOGGED = 1 << 5;
     private static int MATCH_LEAVES = 1 << 6;
     private static int MATCH_SOLID = 1 << 7;
-    
     // Map of base blocks by name
     private static HashMap<String, DynmapBlockState> blocksByName = new HashMap<String, DynmapBlockState>();
     // Map of states by global state index
@@ -68,6 +71,18 @@ public class DynmapBlockState {
     public static String LIT_REDSTONE_ORE_BLOCK = "minecraft:lit_redstone_ore";
     public static String EMERALD_ORE_BLOCK = "minecraft:emerald_ore";
     public static String QUARTZ_ORE_BLOCK = "minecraft:quartz_ore";
+    public static String NETHER_GOLD_ORE_BLOCK = "minecraft:nether_gold_ore";
+    public static String DEEPSLATE_GOLD_ORE_BLOCK = "minecraft:deepslate_gold_ore";
+    public static String DEEPSLATE_IRON_ORE_BLOCK = "minecraft:deepslate_iron_ore";
+    public static String DEEPSLATE_COAL_ORE_BLOCK = "minecraft:deepslate_coal_ore";
+    public static String DEEPSLATE_LAPIS_ORE_BLOCK = "minecraft:deepslate_lapis_ore";
+    public static String DEEPSLATE_DIAMOND_ORE_BLOCK = "minecraft:deepslate_diamond_ore";
+    public static String DEEPSLATE_REDSTONE_ORE_BLOCK = "minecraft:deepslate_redstone_ore";
+    public static String DEEPSLATE_EMERALD_ORE_BLOCK = "minecraft:deepslate_emerald_ore";
+    public static String DEEPSLATE_COPPER_ORE_BLOCK = "minecraft:deepslate_copper_ore";
+    public static String COPPER_ORE_BLOCK = "minecraft:copper_ore";
+    public static String DEEPSLATE_BLOCK = "minecraft:deepslate";
+    public static String NETHERRACK_BLOCK = "minecraft:netherrack";
     public static String LOG_BLOCK = "minecraft:log";
     public static String LOG2_BLOCK = "minecraft:log2";
     public static String LEAVES_BLOCK = "minecraft:leaves";
@@ -92,6 +107,46 @@ public class DynmapBlockState {
 
     private static DynmapBlockState still_water = null;
 
+    public static class Builder {
+    	private DynmapBlockState base;
+    	private int stateidx;
+    	private String blkname;
+    	private String statename;
+    	private String material;
+    	private int legacyblkid;
+    	private int matchflags;
+    	private int lightblocked;
+    	public Builder() {
+    		reset();
+    	}
+    	public void reset() { base = null; blkname = null; statename = null; material = null; legacyblkid = -1; matchflags = 0; lightblocked = 0; }
+    	public Builder setBaseState(DynmapBlockState blkbase) { this.base = blkbase; return this; }
+    	public Builder setStateIndex(int sidx) { this.stateidx = sidx; return this; }
+    	public Builder setBlockName(String blkname) { this.blkname = blkname; return this; }
+    	public Builder setStateName(String stname) { this.statename = stname; return this; }
+    	public Builder setMaterial(String mat) { this.material = mat; return this; }
+    	public Builder setLegacyBlockID(int legacybid) { this.legacyblkid = legacybid; return this; }
+    	public Builder setAir() { this.matchflags |= MATCH_AIR; return this; }
+        public Builder setLog() { this.matchflags |= MATCH_LOG; return this; }
+        public Builder setCustomWater() { this.matchflags |= MATCH_WATER; return this; }
+        public Builder setWaterlogged() { this.matchflags |= MATCH_WATERLOGGED; return this; }
+        public Builder setLeaves() { this.matchflags |= MATCH_LEAVES; return this; }
+        public Builder setSolid() { this.matchflags |= MATCH_SOLID; return this; }
+        public Builder setBlocksLight() { this.lightblocked = 15; return this; }
+        public Builder setAttenuatesLight(int levels) { this.lightblocked = levels; return this; }
+        public DynmapBlockState build() {
+        	DynmapBlockState bs = new DynmapBlockState(base, stateidx, blkname, statename, material, legacyblkid, lightblocked);
+        	if ((matchflags & MATCH_AIR) != 0) bs.setAir();
+        	if ((matchflags & MATCH_LOG) != 0) bs.setLog();
+           	if ((matchflags & MATCH_WATERLOGGED) != 0) bs.setWaterlogged();
+        	if ((matchflags & MATCH_LEAVES) != 0) bs.setLeaves();
+        	if ((matchflags & MATCH_SOLID) != 0) bs.setSolid();
+           	if ((matchflags & MATCH_WATER) != 0) bs.addWaterBlock(blkname);
+           	reset();	// Reset after build complete
+           	return bs;
+        }
+    }
+
     /**
      * Constructor for block state
      * @param base - base block state (null if first/only state for block)
@@ -101,7 +156,7 @@ public class DynmapBlockState {
      * @param material - material name string
      */
     public DynmapBlockState(DynmapBlockState base, int stateidx, String blkname, String statename, String material) {
-    	this(base, stateidx, blkname, statename, material, -1);
+    	this(base, stateidx, blkname, statename, material, -1, -1);
     }
     /**
      * Constructor for block state
@@ -113,6 +168,10 @@ public class DynmapBlockState {
      * @param legacyblkid - legacy block ID (if defined), otherwise -1
      */
     public DynmapBlockState(DynmapBlockState base, int stateidx, String blkname, String statename, String material, int legacyblkid) {
+    	this(base, stateidx, blkname, statename, material, legacyblkid, -1);
+    }
+    private DynmapBlockState(DynmapBlockState base, int stateidx, String blkname, String statename, String material, int legacyblkid, int lightAtten) {
+    	
     	// If we generated lookup arrays, flush them and complain about it
     	if (blockArrayByIndex != null) {
     		blockArrayByIndex = null;
@@ -131,12 +190,12 @@ public class DynmapBlockState {
         }
         blockName = blkname;
         stateName = (statename != null) ? statename : "";
-        
         if (base != this) { // If we aren't base block state
             if (base.states == null) {  // If no state list yet
             	base.states = new DynmapBlockState[Math.max((stateidx+1)*3 / 2, 16)]; // Enough for us to fit
                 Arrays.fill(base.states, AIR);
                 base.states[0] = base;  // Add base state as index 0
+               	base.lookup = new ConcurrentHashMap<String, DynmapBlockState>();	// Initialize lookup cache
             }
             else if (base.states.length <= stateidx) {  // Not enough room
                 // Resize it
@@ -173,6 +232,7 @@ public class DynmapBlockState {
         if (this.blockName.equals(WATER_BLOCK) && (this == this.baseState)) {
             still_water = this;
         }
+    	lightAttenuation = lightAtten;
     }
     /**
      * Generate static lookup arrays once all BlockStates initialized
@@ -278,8 +338,15 @@ public class DynmapBlockState {
      */
     public static final DynmapBlockState getStateByNameAndState(String name, String statename) {
         DynmapBlockState blk = getBaseStateByName(name);
+        DynmapBlockState rslt = AIR;
         if (blk != null) {
+        	rslt = blk;
         	if (blk.states != null) {
+        		// See if we have this in cache
+        		rslt = blk.lookup.get(statename);
+        		if (rslt != null) return rslt;
+        		
+            	rslt = AIR;	// Assume miss
         	    String[] statelist = statename.toLowerCase().split(",");
         		for (DynmapBlockState bb : blk.states) {
         		    boolean match = true;
@@ -297,13 +364,14 @@ public class DynmapBlockState {
         		        }
         		    }
         			if (match) {
-        				return bb;
+        				rslt = bb;
+        				break;
         			}
-        		}
+        		}        	
+        		blk.lookup.put(statename, rslt);	// Cache the lookup
         	}
-        	blk = null;
         }
-        return (blk != null) ? blk : AIR;
+        return rslt;
     }
     /**
      * Get current top of range of block state global indexes, plus 1
@@ -466,10 +534,44 @@ public class DynmapBlockState {
     	matchflags |= MATCH_SOLID;
     }
     /**
+     * Get light attenuation
+     */
+    public final int getLightAttenuation() {
+    	if (lightAttenuation < 0) {
+    		lightAttenuation = (isWater() || isWaterlogged() || isLeaves()) ? 1 : 0;
+    	}
+    	return lightAttenuation;    	
+    }
+    /*
+     * Test if matches attrib=value pair
+     */
+    public final boolean isStateMatch(String attrib, String value) {
+    	String v = attrib + "=" + value;
+    	v = v.toLowerCase();
+    	for (String state : stateList) {
+    		if (state.equals(v)) return true;
+    	}
+    	return false;
+    }
+    /**
      * To printable string
      */
     @Override
     public String toString() {
         return fullName;
+    }
+    // Equals check
+    @Override
+    public boolean equals(Object obj) {
+    	if (obj == this) return true;
+    	if (obj instanceof DynmapBlockState) {
+    		return ((DynmapBlockState)obj).globalStateIndex == this.globalStateIndex;
+    	}
+    	return false;
+    }
+    // Hashcode
+    @Override
+    public int hashCode() {
+    	return this.globalStateIndex;
     }
 }

@@ -170,7 +170,7 @@ public class OBJExport {
         else {
             minZ = maxz; maxZ = minz;
         }
-        if (minY < 0) minY = 0;
+        if (minY < world.minY) minY = world.minY;
         if (maxY >= world.worldheight) maxY = world.worldheight - 1;
         if (centerOrigin) {
             originX = (maxX + minX) / 2.0;
@@ -366,8 +366,8 @@ public class OBJExport {
         /* If no patches, see if custom model */
         if(patches == null) {
             CustomBlockModel cbm = models.getCustomBlockModel(blk);
-            if(cbm != null) {   /* If so, get our meshes */
-                patches = cbm.getMeshForBlock(map);
+            if (cbm != null) {   /* If so, get our meshes */
+        		patches = cbm.getMeshForBlock(map);
             }
         }
         if (patches != null) {
@@ -521,6 +521,12 @@ public class OBJExport {
         f.groupLine = updateGroup(GROUP_TEXTURE, material);
         switch (sv) {
             case TOP:
+                f.faceLine = String.format("f %d/%d %d/%d %d/%d %d/%d\n", v[0], uv[0], v[1], uv[1], v[2], uv[2], v[3], uv[3]); 
+                break;
+            case TOPFLIP:
+                f.faceLine += String.format("f %d/%d %d/%d %d/%d %d/%d\n", v[3], uv[2], v[2], uv[3], v[1], uv[0], v[0], uv[1]); 
+                break;
+            case TOPFLIPV:
                 f.faceLine = String.format("f %d/%d %d/%d %d/%d %d/%d\n", v[0], uv[0], v[1], uv[1], v[2], uv[2], v[3], uv[3]); 
                 break;
             case BOTTOM:

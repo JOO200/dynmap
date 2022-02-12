@@ -5,8 +5,10 @@ import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -57,6 +59,7 @@ import net.minecraft.util.registry.Registry;
 import net.minecraft.util.text.ChatType;
 import net.minecraft.util.text.ITextComponent;
 import net.minecraft.util.text.StringTextComponent;
+import net.minecraft.world.EmptyBlockReader;
 import net.minecraft.world.IBlockReader;
 import net.minecraft.world.IServerWorld;
 import net.minecraft.world.IWorld;
@@ -89,8 +92,6 @@ import net.minecraftforge.fml.loading.moddiscovery.ModFileInfo;
 import net.minecraftforge.fml.loading.moddiscovery.ModInfo;
 import net.minecraftforge.forgespi.language.IModInfo;
 
-import org.apache.commons.codec.Charsets;
-import org.apache.commons.codec.binary.Base64;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.maven.artifact.versioning.ArtifactVersion;
@@ -107,6 +108,7 @@ import org.dynmap.common.BiomeMap;
 import org.dynmap.common.DynmapCommandSender;
 import org.dynmap.common.DynmapPlayer;
 import org.dynmap.common.DynmapServerInterface;
+import org.dynmap.common.chunk.GenericChunkCache;
 import org.dynmap.common.DynmapListenerManager.EventType;
 import org.dynmap.debug.Debug;
 import org.dynmap.forge_1_16_5.DmapCommand;
@@ -146,7 +148,7 @@ public class DynmapPlugin
     private DynmapCore core;
     private PermissionProvider permissions;
     private boolean core_enabled;
-    public SnapshotCache sscache;
+    public GenericChunkCache sscache;
     public PlayerList playerList;
     private MapManager mapManager;
     private static net.minecraft.server.MinecraftServer server;
@@ -223,6 +225,9 @@ public class DynmapPlugin
     /**
      * Initialize block states (org.dynmap.blockstate.DynmapBlockState)
      */
+    /**
+     * 
+     */
     public void initializeBlockStates() {
     	stateByID = new DynmapBlockState[512*32];	// Simple map - scale as needed
     	Arrays.fill(stateByID, DynmapBlockState.AIR); // Default to air
@@ -234,6 +239,7 @@ public class DynmapPlugin
         int baseidx = 0;
     	
     	Iterator<BlockState> iter = bsids.iterator();
+    	DynmapBlockState.Builder bld = new DynmapBlockState.Builder();
 		while (iter.hasNext()) {
 			BlockState bs = iter.next();
 			int idx = bsids.getId(bs);
@@ -265,25 +271,27 @@ public class DynmapPlugin
                 	}
                 	statename += p.getName() + "=" + bs.get(p).toString();
                 }
-                //Log.info("bn=" + bn + ", statenme=" + statename + ",idx=" + idx + ",baseidx=" + baseidx);
-                DynmapBlockState dbs = new DynmapBlockState(basebs, idx - baseidx, bn, statename, mat.toString(), idx);
+                int lightAtten = 15;
+                try {	// Workaround for mods with broken block state logic...
+                	lightAtten = bs.isOpaqueCube(EmptyBlockReader.INSTANCE, BlockPos.ZERO) ? 15 : (bs.propagatesSkylightDown(EmptyBlockReader.INSTANCE, BlockPos.ZERO) ? 0 : 1);
+                } catch (Exception x) {
+                	Log.warning(String.format("Exception while checking lighting data for block state: %s[%s]", bn, statename));
+                	Log.verboseinfo("Exception: " + x.toString());
+                }
+                //Log.info("statename=" + bn + "[" + statename + "], lightAtten=" + lightAtten);
+                // Fill in base attributes
+                bld.setBaseState(basebs).setStateIndex(idx - baseidx).setBlockName(bn).setStateName(statename).setMaterial(mat.toString()).setLegacyBlockID(idx).setAttenuatesLight(lightAtten);
+				if (mat.isSolid()) { bld.setSolid(); }
+				if (mat == Material.AIR) { bld.setAir(); }
+				if (mat == Material.WOOD) { bld.setLog(); }
+				if (mat == Material.LEAVES) { bld.setLeaves(); }
+				if ((!bs.getFluidState().isEmpty()) && !(bs.getBlock() instanceof FlowingFluidBlock)) {
+					bld.setWaterlogged();
+				}
+                DynmapBlockState dbs = bld.build(); // Build state
                 stateByID[idx] = dbs;
                 if (basebs == null) { basebs = dbs; }
-                if (mat.isSolid()) {
-                    dbs.setSolid();
-                }
-                if (mat == Material.AIR) {
-                    dbs.setAir();
-                }
-                if (mat == Material.WOOD) {
-                    dbs.setLog();
-                }
-                if (mat == Material.LEAVES) {
-                    dbs.setLeaves();
-                }
-                if ((!bs.getFluidState().isEmpty()) && !(bs.getBlock() instanceof FlowingFluidBlock)) {
-                    dbs.setWaterlogged();
-                }
+
             }
     	}
         for (int gidx = 0; gidx < DynmapBlockState.getGlobalIndexMax(); gidx++) {
@@ -910,6 +918,9 @@ public class DynmapPlugin
             catch (CancellationException cx) {
                 return null;
             }
+            catch (InterruptedException cx) {
+                return null;
+            }
             catch (ExecutionException xx) {
                 Log.severe("Exception while loading chunks", xx.getCause());
                 return null;
@@ -1148,7 +1159,7 @@ public class DynmapPlugin
         	        if (textureProperty != null) {
         	        	TexturesPayload result = null;
         	        	try {
-        	        		String json = new String(Base64.decodeBase64(textureProperty.getValue()), Charsets.UTF_8);
+                            String json = new String(Base64.getDecoder().decode(textureProperty.getValue()), StandardCharsets.UTF_8);
         	        		result = gson.fromJson(json, TexturesPayload.class);
         	        	} catch (JsonParseException e) {
         	        	}
@@ -1484,7 +1495,6 @@ public class DynmapPlugin
         core.setMinecraftVersion(mcver);
         core.setDataFolder(dataDirectory);
         core.setServer(fserver);
-        ForgeMapChunkCache.init();
         core.setTriggerDefault(TRIGGER_DEFAULTS);
         core.setBiomeNames(getBiomeNames());
 
@@ -1501,7 +1511,7 @@ public class DynmapPlugin
     
     private static int test(CommandSource source) throws CommandSyntaxException
 	{
-        System.out.println(source.toString());
+    	Log.warning(source.toString());
 		return 1;
     }
     
@@ -1546,7 +1556,7 @@ public class DynmapPlugin
         }
 
         playerList = core.playerList;
-        sscache = new SnapshotCache(core.getSnapShotCacheSize(), core.useSoftRefInSnapShotCache());
+        sscache = new GenericChunkCache(core.getSnapShotCacheSize(), core.useSoftRefInSnapShotCache());
         /* Get map manager from core */
         mapManager = core.getMapManager();
 
@@ -1730,7 +1740,7 @@ public class DynmapPlugin
 			IWorld w = event.getWorld();
             if(!(w instanceof ServerWorld)) return;
 			IChunk c = event.getChunk();
-			if ((c != null) && (c.getStatus() == ChunkStatus.FULL)) {
+			if ((c != null) && (c.getStatus() == ChunkStatus.FULL) && (c instanceof Chunk)) {
 				ForgeWorld fw = getWorld((IServerWorld)w, false);
 				if (fw != null) {
 					addKnownChunk(fw, c.getPos());
@@ -1744,24 +1754,27 @@ public class DynmapPlugin
 			IWorld w = event.getWorld();
             if(!(w instanceof ServerWorld)) return;
 			IChunk c = event.getChunk();
-			if ((c != null) && (c.getStatus() == ChunkStatus.FULL)) {
+			if (c != null) {
 				ForgeWorld fw = getWorld((IServerWorld)w, false);
 				ChunkPos cp = c.getPos();
 				if (fw != null) {
 					if (!checkIfKnownChunk(fw, cp)) {
-        				int ymax = 0;
+        				int ymax = Integer.MIN_VALUE;
+        				int ymin = Integer.MAX_VALUE;
         				ChunkSection[] sections = c.getSections();
         				for(int i = 0; i < sections.length; i++) {
         					if((sections[i] != null) && (sections[i].isEmpty() == false)) {
-        						ymax = 16*(i+1);
+        						int sy = sections[i].getYLocation() >> 4;
+        						if (sy < ymin) ymin = sy;
+        						if ((sy+16) > ymax) ymax = sy + 16;
         					}
         				}
         				int x = cp.x << 4;
         				int z = cp.z << 4;
         				// If not empty AND not initial scan
-        				if (ymax > 0) {
-            				Log.info("New generated chunk detected at " + cp + " for " + fw.getName());
-        					mapManager.touchVolume(fw.getName(), x, 0, z, x+15, ymax, z+16, "chunkgenerate");
+        				if (ymax != Integer.MIN_VALUE) {
+            				//Log.info("New generated chunk detected at " + cp + " for " + fw.getName());
+        					mapManager.touchVolume(fw.getName(), x, ymin, z, x+15, ymax, z+15, "chunkgenerate");
         				}
 					}
 					removeKnownChunk(fw, cp);
@@ -1775,25 +1788,31 @@ public class DynmapPlugin
 			IWorld w = event.getWorld();
             if(!(w instanceof ServerWorld)) return;
 			IChunk c = event.getChunk();
-			if ((c != null) && (c.getStatus() == ChunkStatus.FULL)) {
+			if (c != null) {
 				ForgeWorld fw = getWorld((IServerWorld)w, false);
 				ChunkPos cp = c.getPos();
 				if (fw != null) {
 					if (!checkIfKnownChunk(fw, cp)) {
-        				int ymax = 0;
+        				int ymax = Integer.MIN_VALUE;
+        				int ymin = Integer.MAX_VALUE;
         				ChunkSection[] sections = c.getSections();
         				for(int i = 0; i < sections.length; i++) {
         					if((sections[i] != null) && (sections[i].isEmpty() == false)) {
-        						ymax = 16*(i+1);
+        						int sy = sections[i].getYLocation() >> 4;
+        						if (sy < ymin) ymin = sy;
+        						if ((sy+16) > ymax) ymax = sy + 16;
         					}
         				}
         				int x = cp.x << 4;
         				int z = cp.z << 4;
         				// If not empty AND not initial scan
-        				if (ymax > 0) {
-        					mapManager.touchVolume(fw.getName(), x, 0, z, x+15, ymax, z+16, "chunkgenerate");
+        				if (ymax != Integer.MIN_VALUE) {
+        					mapManager.touchVolume(fw.getName(), x, ymin, z, x+15, ymax, z+15, "chunkgenerate");
         				}						
-						addKnownChunk(fw, cp);
+    					// If cooked, add it to known
+    					if ((c.getStatus() == ChunkStatus.FULL) && (c instanceof Chunk)) {
+    						addKnownChunk(fw, cp);
+    					}
 					}
 				}
 			}

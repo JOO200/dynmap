@@ -6,6 +6,7 @@ import java.util.Random;
 
 import org.json.simple.JSONAware;
 import org.json.simple.JSONStreamAware;
+import org.owasp.html.HtmlPolicyBuilder;
 import org.owasp.html.PolicyFactory;
 import org.owasp.html.Sanitizers;
 import org.dynmap.common.DynmapChatColor;
@@ -225,6 +226,26 @@ public class Client {
                         spancnt++;
                         break;
                     }
+                    else if (c == 'x') { // Essentials nickname hexcode format
+                        if (i + 12 <= cnt){ // Check if string is at least long enough to be valid hexcode
+                            if (s.charAt(i+1) == s.charAt(i+3) &&
+                                s.charAt(i+1) == s.charAt(i+5) &&
+                                s.charAt(i+1) == s.charAt(i+7) &&
+                                s.charAt(i+1) == s.charAt(i+9) &&
+                                s.charAt(i+1) == s.charAt(i+11) && // Check if there are enough \u00A7 in a row
+                                s.charAt(i+1) == '\u00A7'){ 
+                                    StringBuilder hex = new StringBuilder().append(s.charAt(i+2))
+                                                                            .append(s.charAt(i+4))
+                                                                            .append(s.charAt(i+6))
+                                                                            .append(s.charAt(i+8))
+                                                                            .append(s.charAt(i+10))
+                                                                            .append(s.charAt(i+12)); // Build hexcode string
+                                    sb.append("<span style=\'color:#" + hex + "\'>"); // Substitute with hexcode
+                                i = i + 12; //move past hex codes
+                            }
+                        }
+                        break;
+                    }
                 }
             }
             else if (c == '&') {    // Essentials color code?
@@ -263,13 +284,54 @@ public class Client {
     }
 
     private static PolicyFactory sanitizer = null; 
+    private static PolicyFactory OLDTAGS = new HtmlPolicyBuilder().allowElements("center", "basefont", "hr").toFactory();
     public static String sanitizeHTML(String html) {
         PolicyFactory s = sanitizer;
         if (s == null) {
             // Generous but safe html formatting allowances
-            s = Sanitizers.FORMATTING.and(Sanitizers.BLOCKS).and(Sanitizers.IMAGES).and(Sanitizers.LINKS).and(Sanitizers.STYLES);
+            s = Sanitizers.FORMATTING.and(Sanitizers.BLOCKS).and(Sanitizers.IMAGES).and(Sanitizers.LINKS).and(Sanitizers.STYLES).and(Sanitizers.TABLES).and(OLDTAGS);
             sanitizer = s;
         }
-        return sanitizer.sanitize(html);
+        return s.sanitize(html);
     }
+    private static PolicyFactory stripper = null; 
+    public static String stripHTML(String html) {
+        PolicyFactory s = stripper;
+        if (s == null) {
+        	// Strip all taks
+        	s = new HtmlPolicyBuilder().toFactory();
+            stripper = s;
+        }
+        return s.sanitize(html);
+    }
+    // Encode plain text string for HTML presentation
+    public static String encodeForHTML(String text) {
+        String s = text != null ? text : "";
+        StringBuilder str = new StringBuilder();
+
+        for (int j = 0; j < s.length(); j++) {
+            char c = s.charAt(j);
+            switch (c) {
+            	case '"':
+            		str.append("&quot;");
+            		break;
+                case '&':
+                    str.append("&amp;");
+                    break;
+                case '<':
+                    str.append("&lt;");
+                    break;
+                case '>':
+                    str.append("&gt;");
+                    break;
+                case '\'':
+                	str.append("&#39;");
+                	break;
+                default:
+            		str.append(c);
+            		break;
+            }
+        }
+        return str.toString();
+    }	
 }

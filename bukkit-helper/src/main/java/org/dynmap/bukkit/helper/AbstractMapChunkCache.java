@@ -14,9 +14,6 @@ import org.dynmap.DynmapChunk;
 import org.dynmap.DynmapCore;
 import org.dynmap.DynmapWorld;
 import org.dynmap.Log;
-import org.dynmap.bukkit.helper.BukkitVersionHelper;
-import org.dynmap.bukkit.helper.BukkitWorld;
-import org.dynmap.bukkit.helper.SnapshotCache;
 import org.dynmap.bukkit.helper.SnapshotCache.SnapshotRec;
 import org.dynmap.common.BiomeMap;
 import org.dynmap.hdmap.HDBlockModels;
@@ -48,6 +45,7 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
     protected World w;
     protected DynmapWorld dw;
     private int nsect;
+    private int sectoff;
     protected List<DynmapChunk> chunks;
     protected ListIterator<DynmapChunk> iterator;
     protected int x_min;
@@ -98,6 +96,7 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
         private BlockStep laststep;
         private DynmapBlockState type = null;
         private final int worldheight;
+        private final int ymin;
         private final int x_base;
         private final int z_base;
         
@@ -108,6 +107,7 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
                 biomePrep();
             initialize(x0, y0, z0);
             worldheight = w.getMaxHeight();
+            ymin = dw.minY;
         }
         
         @Override
@@ -126,7 +126,7 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
                 snap = snaparray[chunkindex];
             }
             laststep = BlockStep.Y_MINUS;
-            if((y >= 0) && (y < worldheight))
+            if((y >= ymin) && (y < worldheight))
                 type = null;
             else
                 type = DynmapBlockState.AIR;
@@ -155,6 +155,47 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
             }
             return 0;
         }
+		@Override
+	    /**
+	     * Get block sky and emitted light, relative to current coordinate
+	     * @return (emitted light * 256) + sky light
+	     */
+	    public final int getBlockLight(BlockStep step) {
+			int emit = 0, sky = 15;
+			if (step.yoff != 0) {	// Y coord - snap is valid already
+				int ny = y + step.yoff;
+				emit = snap.getBlockEmittedLight(bx, ny, bz);
+				sky = snap.getBlockSkyLight(bx, ny, bz);
+			}
+			else {
+				int nx = x + step.xoff;
+				int nz = z + step.zoff;
+				int nchunkindex = ((nx >> 4) - x_min) + (((nz >> 4) - z_min) * x_dim);
+				if ((nchunkindex < snapcnt) && (nchunkindex >= 0)) {
+					emit = snaparray[nchunkindex].getBlockEmittedLight(nx & 0xF, y, nz & 0xF);
+					sky = snaparray[nchunkindex].getBlockSkyLight(nx & 0xF, y, nz & 0xF);
+				}			
+			}
+			return (emit << 8) + sky;
+		}
+		@Override
+	    /**
+	     * Get block sky and emitted light, relative to current coordinate
+	     * @return (emitted light * 256) + sky light
+	     */
+	    public final int getBlockLight(int xoff, int yoff, int zoff) {
+			int emit = 0, sky = 15;
+			int nx = x + xoff;
+			int ny = y + yoff;
+			int nz = z + zoff;
+			int nchunkindex = ((nx >> 4) - x_min) + (((nz >> 4) - z_min) * x_dim);
+			if ((nchunkindex < snapcnt) && (nchunkindex >= 0)) {
+				emit = snaparray[nchunkindex].getBlockEmittedLight(nx & 0xF, ny, nz & 0xF);
+				sky = snaparray[nchunkindex].getBlockSkyLight(nx & 0xF, ny, nz & 0xF);
+			}			
+			return (emit << 8) + sky;
+		}
+		
         private void biomePrep() {
             if(sameneighborbiomecnt != null)
                 return;
@@ -452,7 +493,7 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
                     break;
                 case 4:
                     y--;
-                    if(y < 0) {
+                    if(y < ymin) {
                         type = DynmapBlockState.AIR;
                     }
                     break;
@@ -498,7 +539,7 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
             else
                 laststep = BlockStep.Y_MINUS;
             this.y = y;
-            if((y < 0) || (y >= worldheight)) {
+            if((y < ymin) || (y >= worldheight)) {
                 type = DynmapBlockState.AIR;
             }
             else {
@@ -520,7 +561,7 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
         @Override
         public final DynmapBlockState getBlockTypeAt(BlockStep s) {
             if(s == BlockStep.Y_MINUS) {
-                if(y > 0)
+                if(y > ymin)
                     return snap.getBlockType(bx, y-1, bz);
             }
             else if(s == BlockStep.Y_PLUS) {
@@ -547,16 +588,7 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
         }
         @Override
         public long getBlockKey() {
-            return (((chunkindex * worldheight) + y) << 8) | (bx << 4) | bz;
-        }
-        @Override
-        public final boolean isEmptySection() {
-            try {
-                return !isSectionNotEmpty[chunkindex][y >> 4];
-            } catch (Exception x) {
-                initSectionData(chunkindex);
-                return !isSectionNotEmpty[chunkindex][y >> 4];
-            }
+            return (((chunkindex * (worldheight - ymin)) + (y - ymin)) << 8) | (bx << 4) | bz;
         }
         @Override
         public RenderPatchFactory getPatchFactory() {
@@ -601,6 +633,14 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
                 return 0;
             }
         }
+		@Override
+		public int getDataVersion() {
+			return 0;
+		}
+		@Override
+		public String getChunkStatus() {
+			return null;
+		}
      }
 
     // Special iterator for END : forces skylight to 15
@@ -677,7 +717,7 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
         }
 		@Override
         public boolean isSectionEmpty(int sy) {
-            return (sy < 4);
+            return (sy >= 4);
         }
 		@Override
         public Object[] getBiomeBaseFromSnapshot() {
@@ -705,7 +745,8 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
         if(this.w == null) {
             this.chunks = new ArrayList<DynmapChunk>();
         }
-        nsect = dw.worldheight >> 4;
+        nsect = (dw.worldheight - dw.minY) >> 4;
+        sectoff = (-dw.minY) >> 4;
         this.chunks = chunks;
         /* Compute range */
         if(chunks.size() == 0) {
@@ -966,7 +1007,7 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
         isSectionNotEmpty[idx] = new boolean[nsect + 1];
         if(snaparray[idx] != EMPTY) {
             for(int i = 0; i < nsect; i++) {
-                if(snaparray[idx].isSectionEmpty(i) == false) {
+                if(snaparray[idx].isSectionEmpty(i - sectoff) == false) {
                     isSectionNotEmpty[idx][i] = true;
                 }
             }
@@ -974,10 +1015,12 @@ public abstract class AbstractMapChunkCache extends MapChunkCache {
     }
     public boolean isEmptySection(int sx, int sy, int sz) {
         int idx = (sx - x_min) + (sz - z_min) * x_dim;
-        if(isSectionNotEmpty[idx] == null) {
+    	boolean[] flags = isSectionNotEmpty[idx];
+        if(flags == null) {
             initSectionData(idx);
+            flags = isSectionNotEmpty[idx];
         }
-        return !isSectionNotEmpty[idx][sy];
+        return !flags[sy + sectoff];
     }
 
     /**
