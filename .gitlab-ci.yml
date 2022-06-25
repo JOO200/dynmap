@@ -1,5 +1,6 @@
 variables:
   ARTIFACT_PATH: 'target/*-spigot.jar'
+  BUILD_TASK: 'spigot:build'
 include:
   - project: 'Development/Infrastructure/cicd-templates'
     ref: 'master'
