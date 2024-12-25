@@ -29,7 +29,7 @@ listOf(
   "120-4",
   "120-5",
   "121",
-  //"121-3"
+  "121-3"
 ).forEach {
   include(":bukkit-helper:adapters:bukkit-helper-$it")
 }
