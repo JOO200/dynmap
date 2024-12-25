@@ -26,6 +26,7 @@ import java.util.function.Supplier;
  */
 public class MapChunkCache121_3 extends GenericMapChunkCache {
     private World w;
+
     /**
      * Construct empty cache
      */
@@ -47,7 +48,7 @@ public class MapChunkCache121_3 extends GenericMapChunkCache {
 
     // Load generic chunk from unloaded chunk
     @Override
-    protected Supplier<GenericChunk> loadChunkAsync(DynmapChunk chunk){
+    protected Supplier<GenericChunk> loadChunkAsync(DynmapChunk chunk) {
         CraftWorld cw = (CraftWorld) w;
         CompletableFuture<Optional<CompoundTag>> future = cw.getHandle().getChunkSource().chunkMap.read(new ChunkPos(chunk.x, chunk.z));
         return () -> {
